@@ -1,0 +1,198 @@
+---
+title: "Impact_GCA"
+output: html_document
+---
+
+One is with clinical variables and the other with histological phenotypes. To address the first objective of your project, which was to assess the effect of steroids and other clinical variables on the phenotypes of interest,  you can run regression analysis using the histological phenotypes as outcome and clinical variables as exposure.
+
+I’d suggest to just pick one of the histological phenotypes, e.g. “Media_destruction” and run three separate regression models for these three exposures: duration of steroids, sex and age. Please let me know when you get some preliminary results, and we can then discuss further, and you can run the analysis analogously for other histological and clinical phenotypes of interest.
+
+Import Files:
+```{r}
+clinical <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+```
+
+```{r}
+combined <- merge(clinical, hist_var, by = "ID")
+```
+
+```{r}
+phenotypes <- names(hist_var)[-1]
+num_phenotypes <- length(column_names)
+steroid_models <- vector("list", num_phenotypes)
+age_models <- vector("list", num_phenotypes)
+sex_models <- vector("list", num_phenotypes)
+```
+
+```{r}
+count <- 0
+for (variable in phenotypes) {
+  count <- count + 1
+  
+  # sex
+  formula <- as.formula(paste(variable, "~ sex"))
+  model_sex <- lm(formula, data = combined)
+  sex_models[[count]] <-model_sex 
+ 
+  # steroids
+  formula <- as.formula(paste(variable, "~ steroids_days"))
+  model_steroids <- lm(formula, data = combined)
+  steroid_models[[count]] <-model_steroids 
+  
+  # age
+  formula <- as.formula(paste(variable, "~ age"))
+  model_age <- lm(formula, data = combined)
+  age_models[[count]] <-model_age 
+}
+
+names(sex_models) <- phenotypes
+names(age_models) <- phenotypes
+names(steroid_models) <- phenotypes
+```
+
+```{r}
+pvals_sex <- numeric(length(phenotypes))
+pvals_age <- numeric(length(phenotypes))
+pvals_steroids <- numeric(length(phenotypes))
+
+for (i in seq_along(phenotypes)) {
+  # For sex
+  pvals_sex[i] <- summary(sex_models[[i]])$coefficients["sex", "Pr(>|t|)"]
+  
+  # For age
+  pvals_age[i] <- summary(age_models[[i]])$coefficients["age", "Pr(>|t|)"]
+  
+  # For steroids
+  pvals_steroids[i] <- summary(steroid_models[[i]])$coefficients["steroids_days", "Pr(>|t|)"]
+}
+
+# pvals_sex <- p.adjust(pvals_sex, method = "fdr")
+# pvals_age <- p.adjust(pvals_age, method = "fdr")
+# pvals_steroids <- p.adjust(pvals_steroids, method = "fdr")
+# none significant w/ FDR
+```
+
+```{r}
+library(ggplot2)
+
+df <- data.frame(
+  phenotype = phenotypes,
+  pval = pvals_sex
+)
+
+ggplot(df, aes(x = phenotype, y = -log10(pval))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  theme_get() +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+    plot.margin = margin(10, 10, 40, 10)
+  ) +
+  labs(title = "Significant Phenotypes Based on Sex", x = "Phenotype", y = "-log10(p)")
+
+
+df <- data.frame(
+  phenotype = phenotypes,
+  pval = pvals_age
+)
+
+ggplot(df, aes(x = phenotype, y = -log10(pval))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  theme_get() +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+    plot.margin = margin(10, 10, 40, 10)
+  ) +
+  labs(title = "Significant Phenotypes Based on Age", x = "Phenotype", y = "-log10(p)")
+
+
+df <- data.frame(
+  phenotype = phenotypes,
+  pval = pvals_steroids
+)
+
+ggplot(df, aes(x = phenotype, y = -log10(pval))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  theme_get() +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+    plot.margin = margin(10, 10, 40, 10)
+  ) +
+  labs(title = "Significant Phenotypes Based on Steriod Exposure (in Days)", x = "Phenotype", y = "-log10(p)")
+
+```
+Instead of linearly --> look via logistic regression
+```{r}
+clin_var <- names(clinical)[-1]
+
+# Initialize lists and vectors
+logistic_models <- vector("list", length(clin_var))
+pvals_clinical <- numeric(length(clin_var))
+
+# Loop over each clinical variable
+for (i in seq_along(clin_var)) {
+  variable <- clin_var[i]
+  
+  # Build formula: GCA_present ~ clinical_variable
+  formula <- as.formula(paste("GCA_present ~", variable))
+  
+  # Fit logistic regression model
+  model <- glm(formula, data = combined, family = binomial)
+  
+  # Save model
+  logistic_models[[i]] <- model
+  
+  # Extract p-value for the clinical variable
+  pval <- tryCatch(
+    summary(model)$coefficients[variable, "Pr(>|z|)"],
+    error = function(e) NA  # In case of variable being dropped
+  )
+  
+  pvals_clinical[i] <- pval
+}
+
+# Name the p-value vector for reference
+names(pvals_clinical) <- clin_var
+
+# Apply FDR correction (Benjamini-Hochberg method)
+pvals_fdr <- p.adjust(pvals_clinical, method = "fdr")
+
+```
+
+```{r}
+df <- data.frame(
+  clin_var = clin_var,
+  pval = pvals_clinical
+)
+
+ggplot(df, aes(x = clin_var, y = -log10(pval))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  theme_get() +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+    plot.margin = margin(10, 10, 40, 10)
+  ) +
+  labs(title = "Clinical Predictors of GCA Based on Steriod Exposure (in Days)", x = "Clinical Variable", y = "-log10(p)")
+
+```
+Clinical Variable Significant: platelets, PMR
+
+```{r}
+cor_matrix <- cor(combined[, phenotypes], use = "pairwise.complete.obs")
+heatmap(cor_matrix)
+
+numeric_clin <- combined[, clin_var][, sapply(combined[, clin_var], is.numeric)]
+numeric_clin <- numeric_clin[, apply(numeric_clin, 2, function(x) var(x, na.rm = TRUE) != 0)]
+cor_matrix <- cor(numeric_clin, use = "pairwise.complete.obs")
+heatmap(cor_matrix)
+
+```
+Other: 
+- Multivariable Regression Models
+- LASSO / Penalized Regression
+- Interaction Terms
+
