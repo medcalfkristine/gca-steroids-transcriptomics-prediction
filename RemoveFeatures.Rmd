@@ -1,0 +1,242 @@
+---
+title: "Confounding Analysis"
+output: html_document
+---
+Loading clinical features and histological features.
+```{r}
+clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+combined <- merge(clin_var, hist_var, by = "ID")
+```
+
+Remove: 
+• Any_granulomatous_infiltrate
+• PALI
+• Any_lymphocytic_infiltrate
+• GCA_present
+
+```{r}
+cols_to_remove <- c("Any_granulomatous_infiltrate", "PALI", "Any_lymphocytic_infiltrate", "GCA_present")
+hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
+```
+
+Creating histograms for age and duration of steroids. Grouping them into 3-5 groups.
+
+Age:
+```{r}
+par(mfrow = c(1, 2)) 
+
+hist(combined$age, 
+          col = "grey",
+     main = "Default Histogram of Age",
+     xlab = "Age",
+     ylab = "Frequency")
+
+quartiles <- round(quantile(combined$age, probs = seq(0, 1, 0.25), na.rm = TRUE))
+
+hist(combined$age,
+     breaks = quartiles,
+     col = "grey",
+     main = "Histogram of Age by Quartiles",
+     xlab = "Age",
+     ylab = "Frequency")
+
+cat("Quartiles:\n")
+quartiles
+
+cat("\nGroupings:\n")
+cat("Group 1:", quartiles[1], "-", quartiles[2]-1,"\n")
+cat("Group 2:", quartiles[2], "-", quartiles[3]-1,"\n")
+cat("Group 3:", quartiles[3], "-", quartiles[4]-1,"\n")
+cat("Group 4:", quartiles[4], "-", quartiles[5],"\n")
+
+```
+
+Duration of Steroids:
+```{r}
+par(mfrow = c(1, 2)) 
+
+hist(combined$steroids_days, 
+     col = "grey",
+     main = "Default Histogram ",
+     xlab = "Steroid Duration (in days)",
+     ylab = "Frequency")
+
+summary(combined$steroids_days)
+# outlier: 1833.00
+
+steroid_trimmed <- combined$steroids_days[combined$steroids_days != 1833]
+
+hist(steroid_trimmed, 
+     col = "grey",
+     main = "Trimmed Histogram",
+     xlab = "Steroid Duration (in days)",
+     ylab = "Frequency")
+
+cat("\nGroupings:\n")
+cat("Group 1: Less than 5 \n")
+cat("Group 2: 5 - 10 \n")
+cat("Group 3: More than 10 ")
+```
+
+Create a table of samples in each group for histological features. 
+```{r}
+trimmed_hist <- as.data.frame(hist_var[, -1])
+
+for (col in names(trimmed_hist)) {
+  if (is.numeric(trimmed_hist[[col]]) && length(unique(trimmed_hist[[col]])) < 10) {
+    trimmed_hist[[col]] <- as.factor(trimmed_hist[[col]])
+  }
+}
+
+grouped_cols <- sapply(trimmed_hist, function(x) is.factor(x) || is.character(x))
+grouped_features <- names(trimmed_hist)[grouped_cols]
+
+grouped_summary <- lapply(grouped_features, function(col) {
+  tab <- table(trimmed_hist[[col]], useNA = "no") 
+  data.frame(
+    Feature = col,
+    Level = names(tab),
+    Count = as.integer(tab)
+  )
+})
+
+hist_feature_summary <- do.call(rbind, grouped_summary)
+```
+
+Check the (sample) variance and select for low variance 
+```{r}
+variances <- sapply(trimmed_hist, function(x) {
+  if (is.factor(x)) x <- as.numeric(x)
+  var(x, na.rm = TRUE)
+})
+
+low_var_cols <- names(variances[variances < 0.05])
+print(low_var_cols)
+
+hist(variances, 
+     main = "Histogram of Feature Variances",
+     xlab = "Variance", 
+     ylab = "Frequency",
+     col = "lightblue", 
+     breaks = 50, 
+     xlim = c(0, 2))
+```
+
+Double-check using nearZeroVar()
+```{r}
+library(caret)
+nzv <- nearZeroVar(trimmed_hist)
+filtered_df <- df[, -nzv] 
+```
+
+
+Create a table of samples in each group for clinical features. 
+```{r}
+trimmed_clin <- as.data.frame(clin_var[, -1])
+
+for (col in names(trimmed_clin)) {
+  if (is.numeric(trimmed_clin[[col]]) && length(unique(trimmed_clin[[col]])) < 10) {
+    trimmed_clin[[col]] <- as.factor(trimmed_clin[[col]])
+  }
+}
+
+grouped_cols <- sapply(trimmed_clin, function(x) is.factor(x) || is.character(x))
+grouped_features <- names(trimmed_clin)[grouped_cols]
+
+grouped_summary <- lapply(grouped_features, function(col) {
+  tab <- table(trimmed_clin[[col]], useNA = "no") 
+  data.frame(
+    Feature = col,
+    Level = names(tab),
+    Count = as.integer(tab)
+  )
+})
+
+clin_feature_summary <- do.call(rbind, grouped_summary)
+```
+
+
+Correlation Plots
+
+Phenotype:
+```{r}
+library(pheatmap)
+phenotypes <- names(hist_var)[-1]
+cor_matrix <- cor(combined[, phenotypes], use = "pairwise.complete.obs", method = "kendall") 
+pheatmap(cor_matrix, cluster_rows = TRUE, cluster_cols = TRUE)
+```
+
+Clinical features:
+```{r}
+clinical_features <- names(clin_var)[-1]
+numeric_clin <- combined[, clinical_features]
+numeric_clin <- numeric_clin[, sapply(numeric_clin, is.numeric)]
+numeric_clin <- numeric_clin[, apply(numeric_clin, 2, function(x) var(x, na.rm = TRUE) != 0)]
+cor_matrix_clin <- cor(numeric_clin, use = "pairwise.complete.obs", method = "kendall") 
+pheatmap(cor_matrix_clin, display_numbers = TRUE, cluster_rows = TRUE, cluster_cols = TRUE)
+```
+
+Use 2x2 frequency tables to analyze correlation between binary features? 
+Use phi coeffecient as a measure of concordance 
+
+```{r}
+binary_features <- c()
+for (col in names(trimmed_hist)) {
+  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
+    binary_features <- c(binary_features, col)
+  }
+}
+
+phi_coefficient <- function(x, y) {
+  tab <- table(x, y)
+  if (!all(dim(tab) == c(2, 2))) {
+    return(NA)
+  }
+  a <- tab[1,1]; b <- tab[1,2]; c <- tab[2,1]; d <- tab[2,2]
+  num <- (a * d) - (b * c)
+  denom <- sqrt((a + b) * (c + d) * (a + c) * (b + d))
+  if (denom == 0) return(NA)
+  return(num / denom)
+}
+
+n <- length(binary_features)
+binaryfrequencytable <- matrix(NA, nrow = n, ncol = n)
+colnames(binaryfrequencytable) <- binary_features
+rownames(binaryfrequencytable) <- binary_features
+diag(binaryfrequencytable) <- 1
+
+df <- as.data.frame(lapply(trimmed_hist[binary_features], factor))
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    phi <- phi_coefficient(df[[i]], df[[j]])
+    binaryfrequencytable[i, j] <- phi
+    binaryfrequencytable[j, i] <- phi
+  }
+}
+
+binaryfrequencytable <- as.data.frame(binaryfrequencytable)
+
+```
+
+phi coeffecient above 0.5 is a strong coeffecient
+```{r}
+col <- colnames(binaryfrequencytable)
+
+for (i in 1:(length(col) - 1)) {
+  for (j in (i + 1):length(col)) {
+    val <- binaryfrequencytable[i, j]
+    if (!is.na(val) && val > 0.8) {
+      cat(paste("Feature 1:",col[i], "\nFeature 2:", col[j], "\nPhi = ", round(val, 3), "\n\n"))
+    }
+  }
+}
+```
+Check missingness rate
+```{r}
+missing_rate <- colSums(is.na(trimmed_hist)) / nrow(trimmed_hist)
+sort(missing_rate, decreasing = TRUE)
+
+```
+
+Remove: Granulomatous_infiltrate_in_media, Hyperplasia, Fibrosis

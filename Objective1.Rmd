@@ -1,0 +1,511 @@
+---
+title: "Objective1"
+output: html_document
+---
+
+```{r,  include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(scales)
+library(broom)
+```
+
+```{r}
+clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+combined <- merge(clin_var, hist_var, by = "ID")
+```
+
+Remove: 
+• Any_granulomatous_infiltrate
+• PALI
+• Any_lymphocytic_infiltrate
+• GCA_present
+• Granulomatous_infiltrate_in_media
+• Hyperplasia
+• Fibrosis
+
+```{r}
+cols_to_remove <- c("Any_granulomatous_infiltrate", "PALI", "Any_lymphocytic_infiltrate", "GCA_present", "Granulomatous_infiltrate_in_media", "Hyperplasia", "Fibrosis")
+hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
+trimmed_hist <- as.data.frame(hist_var[, -1])
+```
+
+MODEL TYPES:
+Logistic Models: continuous or categorical features, binary outcomes
+Linear Models: continuous (or encoded categorical) features, continuous outcomes
+Classification Models: continuous or categorical features, categorical outcomes (2+ classes)
+
+Variables:
+Steroids_days → continuous
+Sex → binary
+Age (quartiles) → categorical (ordinal)
+
+Modeling each outcome:
+Binary features → Steroids_days: Linear model
+Binary features → Sex: Logistic model
+Binary features → Age (quartiles): Classification model
+  Use multinomial logistic regression if unordered
+  Use ordinal logistic regression if ordered
+
+
+```{r}
+binary_features <- c()
+for (col in names(trimmed_hist)) {
+  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
+    binary_features <- c(binary_features, col)
+  }
+}
+
+# Fit models
+steroid_models <- lapply(binary_features, function(feature) {
+  formula <- as.formula(paste("steroids_days ~", feature))
+  lm(formula, data = combined)
+})
+names(steroid_models) <- binary_features
+
+# Extract model results
+linear_summary <- do.call(rbind, lapply(seq_along(steroid_models), function(i) {
+  model <- steroid_models[[i]]
+  feature <- binary_features[i]
+  coef_summary <- summary(model)$coefficients
+  
+  if (feature %in% rownames(coef_summary)) {
+    est <- coef_summary[feature, "Estimate"]
+    se <- coef_summary[feature, "Std. Error"]
+    p_val <- coef_summary[feature, "Pr(>|t|)"]
+    ci_lower <- est - 1.96 * se
+    ci_upper <- est + 1.96 * se
+    data.frame(Feature = feature, Estimate = est, LowerCI = ci_lower, UpperCI = ci_upper, PValue = p_val)
+  } else {
+    data.frame(Feature = feature, Estimate = NA, LowerCI = NA, UpperCI = NA, PValue = NA)
+  }
+}))
+
+# Filter valid rows and adjust p-values
+linear_summary <- linear_summary[!is.na(linear_summary$Estimate), ]
+linear_summary$AdjP <- p.adjust(linear_summary$PValue, method = "fdr")
+
+# Forest plot
+library(ggplot2)
+
+ggplot(linear_summary, aes(x = reorder(Feature, Estimate), y = Estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Binary Features Predicting Steroid Days",
+       x = "Histological Feature",
+       y = "Estimated Effect") +
+  theme_minimal()
+
+```
+
+Logistic Regression: Binary Features --> Sex (Binary)
+```{r}
+combined$sex <- factor(combined$sex, levels = c(1, 2), labels = c("Male", "Female"))
+
+logistic_models <- vector("list", length(binary_features))
+names(logistic_models) <- binary_features
+
+for (i in seq_along(binary_features)) {
+  feature <- binary_features[i]
+  formula <- as.formula(paste("sex ~", feature))
+  model_logistic <- glm(formula, data = combined, family = binomial)
+  logistic_models[[i]] <- model_logistic
+}
+
+# Extract p-values
+logistic_p_values <- sapply(seq_along(logistic_models), function(i) {
+  model <- logistic_models[[i]]
+  feature <- binary_features[i]
+  coef_summary <- summary(model)$coefficients
+  if (feature %in% rownames(coef_summary)) {
+    return(coef_summary[feature, "Pr(>|z|)"])
+  } else {
+    return(NA)
+  }
+})
+
+logistic_p_values <- p.adjust(logistic_p_values, method = "fdr")
+names(logistic_p_values) <- binary_features
+
+
+logistic_summary <- data.frame(
+  Feature = character(),
+  OR = numeric(),
+  LowerCI = numeric(),
+  UpperCI = numeric(),
+  PValue = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (i in seq_along(logistic_models)) {
+  model <- logistic_models[[i]]
+  feature <- binary_features[i]
+  coef_summary <- summary(model)$coefficients
+  
+  if (feature %in% rownames(coef_summary)) {
+    coef_val <- coef_summary[feature, "Estimate"]
+    se <- coef_summary[feature, "Std. Error"]
+    p_val <- coef_summary[feature, "Pr(>|z|)"]
+    
+    OR <- exp(coef_val)
+    CI_lower <- exp(coef_val - 1.96 * se)
+    CI_upper <- exp(coef_val + 1.96 * se)
+    
+    logistic_summary <- rbind(logistic_summary, data.frame(
+      Feature = feature,
+      OR = OR,
+      LowerCI = CI_lower,
+      UpperCI = CI_upper,
+      PValue = p_val
+    ))
+  }
+}
+
+# Adjust p-values (FDR)
+logistic_summary$AdjP <- p.adjust(logistic_summary$PValue, method = "fdr")
+
+library(ggplot2)
+
+ggplot(logistic_summary, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Odds Ratios for Binary Features Predicting Sex",
+       x = "Feature",
+       y = "Odds Ratio (Female vs Male)") +
+  theme_minimal()
+
+```
+Ordinal Logistic Regression: 
+```{r}
+combined$age_quartile <- cut(
+  combined$age,
+  breaks = quantile(combined$age, probs = seq(0, 1, 0.25), na.rm = TRUE),
+  include.lowest = TRUE,
+  labels = c("Q1", "Q2", "Q3", "Q4"),
+  ordered_result = TRUE
+)
+
+```
+
+```{r}
+# Make sure age_quartile is an ordered factor
+combined$age_quartile <- factor(combined$age_quartile, ordered = TRUE)
+
+# Load required package
+library(MASS)
+
+ordinal_models <- vector("list", length(binary_features))
+names(ordinal_models) <- binary_features
+
+for (i in seq_along(binary_features)) {
+  feature <- binary_features[i]
+  formula <- as.formula(paste("age_quartile ~", feature))
+  model_ordinal <- polr(formula, data = combined, Hess = TRUE)
+  ordinal_models[[i]] <- model_ordinal
+}
+
+# Extract p-values
+ordinal_p_values <- sapply(seq_along(ordinal_models), function(i) {
+  model <- ordinal_models[[i]]
+  feature <- binary_features[i]
+  coef_summary <- summary(model)$coefficients
+  if (feature %in% rownames(coef_summary)) {
+    zval <- coef_summary[feature, "Value"] / coef_summary[feature, "Std. Error"]
+    return(2 * (1 - pnorm(abs(zval))))
+  } else {
+    return(NA)
+  }
+})
+
+ordinal_p_values <- p.adjust(ordinal_p_values, method = "fdr")
+names(ordinal_p_values) <- binary_features
+
+library(MASS)
+
+ordinal_summary <- data.frame(
+  Feature = character(),
+  OR = numeric(),
+  LowerCI = numeric(),
+  UpperCI = numeric(),
+  PValue = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (i in seq_along(ordinal_models)) {
+  model <- ordinal_models[[i]]
+  feature <- binary_features[i]
+  coef_summary <- summary(model)$coefficients
+  
+  if (feature %in% rownames(coef_summary)) {
+    estimate <- coef_summary[feature, "Value"]
+    se <- coef_summary[feature, "Std. Error"]
+    z <- estimate / se
+    p_val <- 2 * (1 - pnorm(abs(z)))
+    
+    OR <- exp(estimate)
+    CI_lower <- exp(estimate - 1.96 * se)
+    CI_upper <- exp(estimate + 1.96 * se)
+    
+    ordinal_summary <- rbind(ordinal_summary, data.frame(
+      Feature = feature,
+      OR = OR,
+      LowerCI = CI_lower,
+      UpperCI = CI_upper,
+      PValue = p_val
+    ))
+  }
+}
+
+# Adjust p-values for multiple testing
+ordinal_summary$AdjP <- p.adjust(ordinal_summary$PValue, method = "fdr")
+
+library(ggplot2)
+
+ggplot(ordinal_summary, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Odds Ratios for Binary Features Predicting Age Quartile",
+       x = "Histological Feature",
+       y = "Odds Ratio (per increase in age quartile)") +
+  theme_minimal()
+
+```
+
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(scales)
+
+### 1. Load and Clean Data
+# Merge datasets
+combined <- merge(clin_var, hist_var, by = "ID")
+
+# Remove unwanted columns
+cols_to_remove <- c("Any_granulomatous_infiltrate", "PALI", "Any_lymphocytic_infiltrate", 
+                    "GCA_present", "Granulomatous_infiltrate_in_media", "Hyperplasia", "Fibrosis")
+hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
+
+# Extract binary and categorical features
+trimmed_hist <- hist_var[, -1]  # Drop ID column
+binary_features <- c()
+for (col in names(trimmed_hist)) {
+  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
+    binary_features <- c(binary_features, col)
+  }
+}
+categorical_features <- setdiff(names(trimmed_hist), binary_features)
+
+# Convert binary and categorical features to factors
+for (col in c(binary_features, categorical_features)) {
+  combined[[col]] <- factor(combined[[col]])
+}
+
+### 2. Linear Models: Predicting Steroid Days
+
+all_features <- c(binary_features, categorical_features)
+steroid_models <- lapply(all_features, function(feature) {
+  lm(as.formula(paste("steroids_days ~", feature)), data = combined)
+})
+names(steroid_models) <- all_features
+
+linear_summary <- do.call(rbind, lapply(seq_along(steroid_models), function(i) {
+  model <- steroid_models[[i]]
+  feature <- all_features[i]
+  coef_summary <- summary(model)$coefficients
+  rows <- rownames(coef_summary)
+  rows <- rows[rows != "(Intercept)"]
+
+  do.call(rbind, lapply(rows, function(rowname) {
+    est <- coef_summary[rowname, "Estimate"]
+    se <- coef_summary[rowname, "Std. Error"]
+    p_val <- coef_summary[rowname, "Pr(>|t|)"]
+    ci_lower <- est - 1.96 * se
+    ci_upper <- est + 1.96 * se
+
+    # Add level info only for categorical features
+    is_categorical <- feature %in% categorical_features
+    label <- if (is_categorical) paste0(rowname) else feature
+
+    data.frame(
+      Feature = label,
+      Estimate = est,
+      LowerCI = ci_lower,
+      UpperCI = ci_upper,
+      PValue = p_val
+    )
+  }))
+}))
+
+linear_summary$AdjP <- p.adjust(linear_summary$PValue, method = "fdr")
+
+### 3. Logistic Models: Predicting Sex
+
+combined$sex <- factor(combined$sex, levels = c(1, 2), labels = c("Male", "Female"))
+
+logistic_models <- lapply(all_features, function(feature) {
+  glm(as.formula(paste("sex ~", feature)), data = combined, family = binomial)
+})
+names(logistic_models) <- all_features
+
+logistic_summary <- do.call(rbind, lapply(seq_along(logistic_models), function(i) {
+  model <- logistic_models[[i]]
+  feature <- all_features[i]
+  coef_summary <- summary(model)$coefficients
+  rows <- rownames(coef_summary)
+  rows <- rows[rows != "(Intercept)"]
+
+  do.call(rbind, lapply(rows, function(rowname) {
+    est <- coef_summary[rowname, "Estimate"]
+    se <- coef_summary[rowname, "Std. Error"]
+    p_val <- coef_summary[rowname, "Pr(>|z|)"]
+    or <- exp(est)
+    ci_lower <- exp(est - 1.96 * se)
+    ci_upper <- exp(est + 1.96 * se)
+
+    # Conditionally label levels
+    is_categorical <- feature %in% categorical_features
+    label <- if (is_categorical) paste0(rowname) else feature
+
+    data.frame(
+      Feature = label,
+      OR = or,
+      LowerCI = ci_lower,
+      UpperCI = ci_upper,
+      PValue = p_val
+    )
+  }))
+}))
+
+logistic_summary$AdjP <- p.adjust(logistic_summary$PValue, method = "fdr")
+
+### 4. Ordinal Logistic Models: Predicting Age Quartile
+
+combined$age_quartile <- cut(
+  combined$age,
+  breaks = quantile(combined$age, probs = seq(0, 1, 0.25), na.rm = TRUE),
+  include.lowest = TRUE,
+  labels = c("Q1", "Q2", "Q3", "Q4"),
+  ordered_result = TRUE
+)
+
+ordinal_models <- lapply(all_features, function(feature) {
+  polr(as.formula(paste("age_quartile ~", feature)), data = combined, Hess = TRUE)
+})
+names(ordinal_models) <- all_features
+
+ordinal_summary <- do.call(rbind, lapply(seq_along(ordinal_models), function(i) {
+  model <- ordinal_models[[i]]
+  feature <- all_features[i]
+  coef_summary <- summary(model)$coefficients
+  rows <- rownames(coef_summary)
+  rows <- rows[rows != "(Intercept)"]
+  do.call(rbind, lapply(rows, function(rowname) {
+    est <- coef_summary[rowname, "Value"]
+    se <- coef_summary[rowname, "Std. Error"]
+    z_val <- est / se
+    p_val <- 2 * (1 - pnorm(abs(z_val)))
+    or <- exp(est)
+    ci_lower <- exp(est - 1.96 * se)
+    ci_upper <- exp(est + 1.96 * se)
+    data.frame(Feature = paste0(feature, ":", rowname), OR = or, LowerCI = ci_lower, UpperCI = ci_upper, PValue = p_val)
+  }))
+}))
+ordinal_summary$AdjP <- p.adjust(ordinal_summary$PValue, method = "fdr")
+
+### 5. Forest Plots
+
+# Increase margins for text
+library(gridExtra)
+
+# Linear model forest plot
+ggplot(linear_summary, aes(x = reorder(Feature, Estimate), y = Estimate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Histological Predictors of Steroid Exposure Duration",
+       x = "Feature",
+       y = "Effect Estimate") +
+  theme(plot.title = element_text(hjust = 0))  # Left-align title
+
+# Logistic model forest plot
+ggplot(logistic_summary, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Histological Predictors of Patient Sex",
+       x = "Feature",
+       y = "Odds Ratio") +
+  theme(plot.title = element_text(hjust = 0))  # Left-align title
+
+logistic_summary <- logistic_summary[logistic_summary$Feature != "Barcelona_score2", ]
+ggplot(logistic_summary, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Histological Predictors of Patient Sex",
+       x = "Feature",
+       y = "Odds Ratio") +
+  theme(plot.title = element_text(hjust = 0))  # Left-align title
+
+
+# Ordinal logistic model forest plots
+
+# Filter data for Q1|Q2
+plot_q1_q2 <- ordinal_summary[grepl(":Q1\\|Q2$", ordinal_summary$Feature), ]
+
+# Q1|Q2 plot
+ggplot(plot_q1_q2, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Effect of Histological Features on Age Quartile Transition (Q1|Q2)",
+       x = "Feature",
+       y = "Odds Ratio") +
+  theme(plot.title = element_text(hjust = 2))  # Left-align title
+
+# Filter data for Q2|Q3
+plot_q2_q3 <- ordinal_summary[grepl(":Q2\\|Q3$", ordinal_summary$Feature), ]
+
+# Q2|Q3 plot
+ggplot(plot_q2_q3, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Effect of Histological Features on Age Quartile Transition (Q2|Q3)",
+       x = "Feature",
+       y = "Odds Ratio") +
+  theme(plot.title = element_text(hjust = 2))  # Left-align title
+
+# Filter data for Q3|Q4
+plot_q3_q4 <- ordinal_summary[grepl(":Q3\\|Q4$", ordinal_summary$Feature), ]
+
+# Q3|Q4 plot
+ggplot(plot_q3_q4, aes(x = reorder(Feature, OR), y = OR)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Effect of Histological Features on Age Quartile Transition (Q3|Q4)",
+       x = "Feature",
+       y = "Odds Ratio") +
+  theme(plot.title = element_text(hjust = 2))  # Left-align title
+
+```
+

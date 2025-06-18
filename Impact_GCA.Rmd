@@ -1,30 +1,119 @@
 ---
 title: "Impact_GCA"
-output: html_document
+header-includes:
+   - \usepackage{amsmath}
+   - \usepackage{subcaption}
+   - \usepackage{fullpage}
+   - \usepackage{textcomp}
+   - \usepackage{graphicx}
+   - \usepackage{sidecap}
+   - \usepackage{setspace}
+   - \usepackage{sectsty}
+   - \usepackage{listings}
+   - \usepackage{amssymb}
+   - \newcommand{\iput}{\textrm{\textsc{input}}}
+   - \newcommand{\oput}{\textrm{\textsc{output}}}
+   - \newcommand{\N}{\mathcal{N}}
+   - \newcommand{\Lik}{\mathcal{L}}
+   - \newcommand{\q}{\textbf{Q.\stepcounter{t}\thet}}
+output:
+  pdf_document:
+    number_sections: true
+editor_options: 
+  markdown: 
+    wrap: sentence
 ---
 
+# First Objective: Assess Effect of Steroids on GCA
 One is with clinical variables and the other with histological phenotypes. To address the first objective of your project, which was to assess the effect of steroids and other clinical variables on the phenotypes of interest,  you can run regression analysis using the histological phenotypes as outcome and clinical variables as exposure.
 
 I’d suggest to just pick one of the histological phenotypes, e.g. “Media_destruction” and run three separate regression models for these three exposures: duration of steroids, sex and age. Please let me know when you get some preliminary results, and we can then discuss further, and you can run the analysis analogously for other histological and clinical phenotypes of interest.
 
-Import Files:
+Aim 1: Effect of clinical variables on histological phenotypes
+Aim 2: Effect of clinical variables on diagnosis (e.g. GCA_present)
+
+## Import Files
 ```{r}
+library(ggplot2)
 clinical <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
 hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
-```
 
-```{r}
+# merge together
 combined <- merge(clinical, hist_var, by = "ID")
+phenotypes <- names(hist_var)[-1]
+clin_var <- names(clinical)[-1]
+num_phenotypes <- length(phenotypes)
+```
+
+## Heatmap
+```{r}
+cor_matrix <- cor(combined[, phenotypes], use = "pairwise.complete.obs")
+library(pheatmap)
+pheatmap(cor_matrix, cluster_rows = TRUE, cluster_cols = TRUE)
+
+numeric_clin <- combined[, clin_var][, sapply(combined[, clin_var], is.numeric)]
+numeric_clin <- numeric_clin[, apply(numeric_clin, 2, function(x) var(x, na.rm = TRUE) != 0)]
+cor_matrix <- cor(numeric_clin, use = "pairwise.complete.obs")
+library(pheatmap)
+pheatmap(cor_matrix, display_numbers = TRUE, cluster_rows = TRUE, cluster_cols = TRUE)
+
+# dont use spearman/pearson
 ```
 
 ```{r}
-phenotypes <- names(hist_var)[-1]
-num_phenotypes <- length(column_names)
+cor_results <- data.frame(
+  phenotype = character(),
+  correlation = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (pheno in phenotypes) {
+  x <- combined[[pheno]]
+  y <- combined$GCA_present
+  if (is.numeric(x) && length(na.omit(x)) > 2) {
+    test <- cor.test(x, y, method = "pearson", use = "complete.obs")
+    cor_results <- rbind(cor_results, data.frame(
+      phenotype = pheno,
+      correlation = test$estimate,
+      p_value = test$p.value
+    ))
+  }
+}
+
+cor_results <- cor_results[order(-abs(cor_results$correlation)), ]
+print(cor_results)
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(cor_results, aes(x = reorder(phenotype, correlation), y = correlation)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_hline(yintercept = 0, color = "black") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Correlation Between Histological Phenotypes and GCA Diagnosis",
+       x = "Phenotype", y = "Pearson Correlation Coefficient")
+
+```
+
+Blocks of high correlation --> suggest many histological features co-occur.
+
+GCA_present is moderately to strongly correlated with many features. This suggests many of these phenotypes track with GCA diagnosis -> they are histological hallmarks or correlates of GCA.
+
+Good for multicollinearity issues. 
+
+## Simple Regression Models
+
+```{r}
 steroid_models <- vector("list", num_phenotypes)
 age_models <- vector("list", num_phenotypes)
 sex_models <- vector("list", num_phenotypes)
 ```
 
+### Linear Regression
 ```{r}
 count <- 0
 for (variable in phenotypes) {
@@ -51,6 +140,7 @@ names(age_models) <- phenotypes
 names(steroid_models) <- phenotypes
 ```
 
+Get p-values
 ```{r}
 pvals_sex <- numeric(length(phenotypes))
 pvals_age <- numeric(length(phenotypes))
@@ -70,12 +160,8 @@ for (i in seq_along(phenotypes)) {
 # pvals_sex <- p.adjust(pvals_sex, method = "fdr")
 # pvals_age <- p.adjust(pvals_age, method = "fdr")
 # pvals_steroids <- p.adjust(pvals_steroids, method = "fdr")
-# none significant w/ FDR
-```
 
-```{r}
-library(ggplot2)
-
+# plot
 df <- data.frame(
   phenotype = phenotypes,
   pval = pvals_sex
@@ -124,75 +210,248 @@ ggplot(df, aes(x = phenotype, y = -log10(pval))) +
   labs(title = "Significant Phenotypes Based on Steriod Exposure (in Days)", x = "Phenotype", y = "-log10(p)")
 
 ```
-Instead of linearly --> look via logistic regression
+break age into 5 year blocks
+Effect size (beta coeffecients) and confidence intervals across all histological phenotypes
+
 ```{r}
-clin_var <- names(clinical)[-1]
+# Initialize storage
+results_df <- data.frame(
+  phenotype = phenotypes,
+  beta_age = NA, ci_lower_age = NA, ci_upper_age = NA,
+  beta_sex = NA, ci_lower_sex = NA, ci_upper_sex = NA,
+  beta_steroids = NA, ci_lower_steroids = NA, ci_upper_steroids = NA
+)
 
-# Initialize lists and vectors
-logistic_models <- vector("list", length(clin_var))
-pvals_clinical <- numeric(length(clin_var))
-
-# Loop over each clinical variable
-for (i in seq_along(clin_var)) {
-  variable <- clin_var[i]
+# Loop through each phenotype
+for (i in seq_along(phenotypes)) {
+  var <- phenotypes[i]
   
-  # Build formula: GCA_present ~ clinical_variable
+  # Age model
+  model_age <- age_models[[i]]
+  if (!is.null(model_age)) {
+    coef_age <- summary(model_age)$coefficients
+    ci_age <- confint(model_age)
+    results_df$beta_age[i] <- coef_age["age", "Estimate"]
+    results_df$ci_lower_age[i] <- ci_age["age", 1]
+    results_df$ci_upper_age[i] <- ci_age["age", 2]
+  }
+  
+  # Sex model
+  model_sex <- sex_models[[i]]
+  if (!is.null(model_sex)) {
+    coef_sex <- summary(model_sex)$coefficients
+    ci_sex <- confint(model_sex)
+    results_df$beta_sex[i] <- coef_sex["sex", "Estimate"]
+    results_df$ci_lower_sex[i] <- ci_sex["sex", 1]
+    results_df$ci_upper_sex[i] <- ci_sex["sex", 2]
+  }
+  
+  # Steroids model
+  model_steroids <- steroid_models[[i]]
+  if (!is.null(model_steroids)) {
+    coef_steroids <- summary(model_steroids)$coefficients
+    ci_steroids <- confint(model_steroids)
+    results_df$beta_steroids[i] <- coef_steroids["steroids_days", "Estimate"]
+    results_df$ci_lower_steroids[i] <- ci_steroids["steroids_days", 1]
+    results_df$ci_upper_steroids[i] <- ci_steroids["steroids_days", 2]
+  }
+}
+# Plot for Age
+ggplot(results_df, aes(x = reorder(phenotype, beta_age), y = beta_age)) +
+  geom_point(color = "steelblue") +
+  geom_errorbar(aes(ymin = ci_lower_age, ymax = ci_upper_age), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Effect of Age on Histological Phenotypes",
+       x = "Phenotype",
+       y = "Beta Coefficient (with 95% CI)")
+
+# Plot for Sex
+ggplot(results_df, aes(x = reorder(phenotype, beta_sex), y = beta_sex)) +
+  geom_point(color = "steelblue") +
+  geom_errorbar(aes(ymin = ci_lower_sex, ymax = ci_upper_sex), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Effect of Sex on Histological Phenotypes",
+       x = "Phenotype",
+       y = "Beta Coefficient (with 95% CI)")
+
+# Plot for Steroid Exposure
+ggplot(results_df, aes(x = reorder(phenotype, beta_steroids), y = beta_steroids)) +
+  geom_point(color = "steelblue") +
+  geom_errorbar(aes(ymin = ci_lower_steroids, ymax = ci_upper_steroids), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Effect of Steroid Exposure on Histological Phenotypes",
+       x = "Phenotype",
+       y = "Beta Coefficient (with 95% CI)")
+
+```
+
+### Logistic Regression Model
+Instead of linearly --> look at steroids via logistic regression
+```{r}
+library(logistf)
+
+phenotypes_log <- setdiff(names(combined), "GCA_present")
+
+firth_models <- vector("list", length(phenotypes_log))
+pvals_clinical <- numeric(length(phenotypes_log))
+
+for (i in seq_along(phenotypes_log)) {
+  variable <- phenotypes_log[i]
   formula <- as.formula(paste("GCA_present ~", variable))
   
-  # Fit logistic regression model
-  model <- glm(formula, data = combined, family = binomial)
+  # Clean data for this phenotype
+  subset_data <- combined[, c("GCA_present", variable)]
+  subset_data <- subset_data[complete.cases(subset_data), ]
   
-  # Save model
-  logistic_models[[i]] <- model
+  if (nrow(subset_data) < 10 || length(unique(subset_data$GCA_present)) < 2) {
+    pvals_clinical[i] <- NA
+    next
+  }
   
-  # Extract p-value for the clinical variable
-  pval <- tryCatch(
-    summary(model)$coefficients[variable, "Pr(>|z|)"],
-    error = function(e) NA  # In case of variable being dropped
+  model <- tryCatch(
+    logistf(formula, data = subset_data),
+    error = function(e) NULL
   )
   
-  pvals_clinical[i] <- pval
+  firth_models[[i]] <- model
+  
+  # Extract p-value if model ran
+  if (!is.null(model) && length(model$prob) > 0) {
+    pvals_clinical[i] <- model$prob[2]  # second row = your phenotype
+  } else {
+    pvals_clinical[i] <- NA
+  }
 }
 
-# Name the p-value vector for reference
-names(pvals_clinical) <- clin_var
-
-# Apply FDR correction (Benjamini-Hochberg method)
+names(pvals_clinical) <- phenotypes_log
 pvals_fdr <- p.adjust(pvals_clinical, method = "fdr")
 
 ```
 
 ```{r}
 df <- data.frame(
-  clin_var = clin_var,
-  pval = pvals_clinical
+  phenotype = phenotypes_log,
+  pval = pvals_fdr
 )
+df <- df[!is.na(df$pval), ]
 
-ggplot(df, aes(x = clin_var, y = -log10(pval))) +
+ggplot(df, aes(x = reorder(phenotype, -log10(pval)), y = -log10(pval))) +
   geom_bar(stat = "identity", fill = "skyblue") +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
-  theme_get() +
-  theme(
-    axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
-    plot.margin = margin(10, 10, 40, 10)
-  ) +
-  labs(title = "Clinical Predictors of GCA Based on Steriod Exposure (in Days)", x = "Clinical Variable", y = "-log10(p)")
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Firth Logistic Regression: Phenotypes Predicting GCA",
+       x = "Histological Phenotype", y = "-log10(p-value)")
 
 ```
-Clinical Variable Significant: platelets, PMR
+Logistic regression was difficult because many variables perfectly seperated. Used Firth's regression in order to penalise likelihood to allow regression. 
+
+
+## Multivariable Regression Models
+
+### Linear Regression Model
+```{r}
+# Initialize storage
+multi_results <- data.frame(
+  phenotype = character(),
+  variable = character(),
+  beta = numeric(),
+  ci_lower = numeric(),
+  ci_upper = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each histological phenotype
+for (pheno in phenotypes) {
+  formula <- as.formula(paste(pheno, "~ sex + age + steroids_days"))
+  model <- lm(formula, data = combined)
+  
+  # Get summary and confidence intervals
+  coefs <- summary(model)$coefficients
+  conf <- confint(model)
+  
+  for (var in c("sex", "age", "steroids_days")) {
+    if (var %in% rownames(coefs)) {
+      multi_results <- rbind(multi_results, data.frame(
+        phenotype = pheno,
+        variable = var,
+        beta = coefs[var, "Estimate"],
+        ci_lower = conf[var, 1],
+        ci_upper = conf[var, 2],
+        p_value = coefs[var, "Pr(>|t|)"]
+      ))
+    }
+  }
+}
+
+```
 
 ```{r}
-cor_matrix <- cor(combined[, phenotypes], use = "pairwise.complete.obs")
-heatmap(cor_matrix)
+significant_results <- subset(multi_results, p_value < 0.05)
 
-numeric_clin <- combined[, clin_var][, sapply(combined[, clin_var], is.numeric)]
-numeric_clin <- numeric_clin[, apply(numeric_clin, 2, function(x) var(x, na.rm = TRUE) != 0)]
-cor_matrix <- cor(numeric_clin, use = "pairwise.complete.obs")
-heatmap(cor_matrix)
+plot_effects <- function(df, predictor) {
+  df_subset <- subset(df, variable == predictor)
+  ggplot(df_subset, aes(x = reorder(phenotype, beta), y = beta)) +
+    geom_point(color = "steelblue") +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    coord_flip() +
+    theme_minimal() +
+    labs(
+      title = paste("Adjusted Effect of", predictor, "on Histological Phenotypes"),
+      x = "Phenotype",
+      y = "Beta Coefficient (95% CI)"
+    )
+}
+
+plot_effects(multi_results, "age")
+plot_effects(multi_results, "sex")
+plot_effects(multi_results, "steroids_days")
 
 ```
-Other: 
-- Multivariable Regression Models
-- LASSO / Penalized Regression
-- Interaction Terms
+keep adventitia, drop any
+```{r}
+library(reshape2)
+heat_df <- dcast(multi_results, phenotype ~ variable, value.var = "beta")
+heat_matrix <- as.matrix(heat_df[,-1])
+rownames(heat_matrix) <- heat_df$phenotype
 
+pheatmap::pheatmap(heat_matrix, cluster_rows = TRUE, cluster_cols = TRUE,
+                   main = "Beta Coefficients: Multivariable Model")
+
+```
+
+
+### Logistic Regression Model
+```{r}
+model_multi <- glm(GCA_present ~ age + sex + steroids_days + platelets + PMR, data = combined, family = binomial)
+summary(model_multi)
+```
+
+```{r}
+significant_results <- subset(multi_results, p_value < 0.05)
+age_plot <- subset(multi_results, variable == "age")
+
+ggplot(age_plot, aes(x = reorder(phenotype, beta), y = beta)) +
+  geom_point(color = "steelblue") +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Adjusted Effect of Age on Histological Phenotypes",
+       x = "Phenotype", y = "Beta Coefficient (95% CI)")
+sex_plot <- subset(multi_results, variable == "sex")
+steroids_plot <- subset(multi_results, variable == "steroids_days")
+
+```
+
+need to: 
+- analyse results
+- include RNA-seq data
