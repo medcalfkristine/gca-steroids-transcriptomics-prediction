@@ -6,6 +6,7 @@ Loading clinical features and histological features.
 ```{r}
 clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
 hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+names(hist_var)[names(hist_var) == "Lymphocytic_infiltrate_in._adventitia"] <- "Lymphocytic_infiltrate_in_adventitia"
 combined <- merge(clin_var, hist_var, by = "ID")
 ```
 
@@ -23,33 +24,180 @@ hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
 Creating histograms for age and duration of steroids. Grouping them into 3-5 groups.
 
 Age:
+Based on quintiles
 ```{r}
-par(mfrow = c(1, 2)) 
+quintiles <- round(quantile(combined$age, probs = seq(0, 1, 0.2), na.rm = TRUE))
 
-hist(combined$age, 
-          col = "grey",
-     main = "Default Histogram of Age",
-     xlab = "Age",
-     ylab = "Frequency")
+combined$age_quintiles <- cut(combined$age,
+                              breaks = quintiles,
+                              include.lowest = TRUE,
+                              right = TRUE)
 
+table(combined$age_quintiles)
+
+hist_result_quintiles <- hist(combined$age,
+                              breaks = quintiles,
+                              right = TRUE,
+                              col = "steelblue",
+                              main = "Histogram of Age by Quintiles",
+                              xlab = "Age",
+                              ylab = "Density",
+                              freq = FALSE, 
+                              ylim = c(0, 0.05))
+
+text(x = hist_result_quintiles$mids,
+     y = hist_result_quintiles$density,
+     labels = hist_result_quintiles$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
+Based on quartiles.
+```{r}
 quartiles <- round(quantile(combined$age, probs = seq(0, 1, 0.25), na.rm = TRUE))
 
-hist(combined$age,
+combined$age_quartiles <- cut(combined$age,
+                          breaks = quartiles,
+                          include.lowest = TRUE,
+                          right = FALSE)
+
+table(combined$age_quartiles)
+
+hist_result_quartiles <- hist(combined$age,
      breaks = quartiles,
-     col = "grey",
+     right = FALSE,
+     col = "steelblue",
      main = "Histogram of Age by Quartiles",
      xlab = "Age",
-     ylab = "Frequency")
+     ylab = "Density",
+     freq = FALSE,
+     ylim = c(0, 0.05))
 
-cat("Quartiles:\n")
-quartiles
+text(x = hist_result_quartiles$mids,
+     y = hist_result_quartiles$density,  
+     labels = hist_result_quartiles$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
 
-cat("\nGroupings:\n")
-cat("Group 1:", quartiles[1], "-", quartiles[2]-1,"\n")
-cat("Group 2:", quartiles[2], "-", quartiles[3]-1,"\n")
-cat("Group 3:", quartiles[3], "-", quartiles[4]-1,"\n")
-cat("Group 4:", quartiles[4], "-", quartiles[5],"\n")
+Based on tertiles
+```{r}
+tertiles <- quantile(combined$age, probs = seq(0, 1, length.out = 4), na.rm = TRUE)
 
+combined$age_tertile <- cut(combined$age,
+                            breaks = tertiles,
+                            include.lowest = TRUE,
+                            right = FALSE)
+
+table(combined$age_tertile)
+
+hist_result_tertiles <- hist(combined$age,
+     breaks = tertiles,
+     right = FALSE,
+     col = "steelblue",
+     main = "Histogram of Age by Tertiles",
+     xlab = "Age",
+     ylab = "Density",
+     freq = FALSE,
+     ylim = c(0, 0.045))
+
+text(x = hist_result_tertiles$mids,
+     y = hist_result_tertiles$density,  
+     labels = hist_result_tertiles$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+
+```
+
+Based on 11 year breaks: creates 3 groups with most even split
+```{r}
+min_age <- floor(min(combined$age, na.rm = TRUE))
+max_age <- ceiling(max(combined$age, na.rm = TRUE))
+
+eleven_year_breaks <- seq(min_age, max_age + 11, by = 11)
+
+combined$age_with_eleven_year_breaks <- cut(combined$age,
+                               breaks = eleven_year_breaks,
+                               include.lowest = TRUE,
+                               right = FALSE)
+
+hist_result_eleven_years <- hist(combined$age,
+     breaks = eleven_year_breaks,
+     right = FALSE,
+     col = "steelblue",
+     main = "Histogram of Age Split by 11 Years",
+     xlab = "Age",
+     ylab = "Density",
+     freq = FALSE, 
+    ylim = c(0, 0.05))
+
+text(x = hist_result_eleven_years$mids,
+     y = hist_result_eleven_years$density,  
+     labels = hist_result_eleven_years$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
+By eight year breaks: creates 4 groups with most even split
+```{r}
+eight_year_breaks <- seq(min_age, max_age, by = 8)
+
+combined$age_with_eight_year_breaks <- cut(combined$age,
+                               breaks = eight_year_breaks,
+                               include.lowest = TRUE,
+                               right = FALSE)
+
+table(combined$age_with_eight_year_breaks)
+
+hist_result_eight_years <- hist(combined$age,
+     breaks = eight_year_breaks,
+     right = FALSE,
+     col = "steelblue",
+     main = "Histogram of Age Split by 8 Years",
+     xlab = "Age",
+     ylab = "Density",
+     freq = FALSE, 
+      ylim = c(0, 0.06))
+
+text(x = hist_result_eight_years$mids,
+     y = hist_result_eight_years$density,  
+     labels = hist_result_eight_years$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
+By 7 year breaks: creates 5 groups
+```{r}
+seven_year_breaks <- seq(min_age, max_age + 7, by = 7)
+
+combined$age_with_seven_year_breaks <- cut(combined$age,
+                               breaks = seven_year_breaks,
+                               include.lowest = TRUE,
+                               right = FALSE)
+
+table(combined$age_with_seven_year_breaks)
+
+hist_result_seven_years <- hist(combined$age,
+     breaks = seven_year_breaks,
+     right = FALSE,
+     col = "steelblue",
+     main = "Histogram of Age Split by 7 Years",
+     xlab = "Age",
+     ylab = "Density",
+     freq = FALSE,
+     ylim = c(0, 0.06))
+
+text(x = hist_result_seven_years$mids,
+     y = hist_result_seven_years$density,  
+     labels = hist_result_seven_years$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
 ```
 
 Duration of Steroids:
@@ -73,14 +221,99 @@ hist(steroid_trimmed,
      xlab = "Steroid Duration (in days)",
      ylab = "Frequency")
 
-cat("\nGroupings:\n")
-cat("Group 1: Less than 5 \n")
-cat("Group 2: 5 - 10 \n")
-cat("Group 3: More than 10 ")
 ```
+
+Clinical perspective
+```{r}
+breaks <- c(min(steroid_trimmed, na.rm = TRUE), 5, 10, max(steroid_trimmed, na.rm = TRUE) + 1)
+
+hist_steroid_clinical <- hist(steroid_trimmed,
+     breaks = breaks,
+     col = "steelblue",
+     main = "Histogram of Steroid Duration",
+     xlab = "Steroid Duration (days)",
+     ylab = "Density", 
+     freq = FALSE, 
+     ylim = c(0, 0.11))
+
+text(x = hist_steroid_clinical$mids,
+     y = hist_steroid_clinical$density,  
+     labels = hist_steroid_clinical$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
+Non-clinical perspective
+```{r}
+tertiles <- quantile(steroid_trimmed, probs = seq(0, 1, length.out = 4), na.rm = TRUE)
+
+hist_result_tertiles <- hist(steroid_trimmed,
+     breaks = tertiles,
+     right = FALSE,
+     col = "steelblue",
+     main = "Histogram of Steroid Exposure by Tertiles",
+     xlab = "Steroid Exposure (in Days)",
+     ylab = "Density",
+     freq = FALSE,
+     ylim = c(0, 0.12))
+
+text(x = hist_result_tertiles$mids,
+     y = hist_result_tertiles$density,  
+     labels = hist_result_tertiles$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
+```{r}
+quintiles <- round(quantile(steroid_trimmed, probs = seq(0, 1, 0.2), na.rm = TRUE))
+
+hist_result_quintiles <- hist(steroid_trimmed,
+                              breaks = quintiles,
+                              right = TRUE,
+                              col = "steelblue",
+                              main = "Histogram of Steroid Exposure by Quintiles",
+                              xlab = "Steroid Exposure (in Days)",
+                              ylab = "Density",
+                              freq = FALSE, 
+                              ylim = c(0, 0.14))
+
+text(x = hist_result_quintiles$mids,
+     y = hist_result_quintiles$density,
+     labels = hist_result_quintiles$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
+Based on quartiles.
+```{r}
+quartiles <- round(quantile(steroid_trimmed, probs = seq(0, 1, 0.25), na.rm = TRUE))
+
+hist_result_quartiles <- hist(steroid_trimmed,
+     breaks = quartiles,
+     right = TRUE,
+     col = "steelblue",
+     main = "Histogram of Steroid Exposure by Quartiles",
+     xlab = "Steroid Exposure (in Days)",
+     ylab = "Density",
+     freq = FALSE,
+     ylim = c(0, 0.15))
+
+text(x = hist_result_quartiles$mids,
+     y = hist_result_quartiles$density,  
+     labels = hist_result_quartiles$counts,
+     col = "black",
+     pos = 3,
+     cex = 0.9)
+```
+
 
 Create a table of samples in each group for histological features. 
 ```{r}
+library(tidyr)
+
 trimmed_hist <- as.data.frame(hist_var[, -1])
 
 for (col in names(trimmed_hist)) {
@@ -93,15 +326,23 @@ grouped_cols <- sapply(trimmed_hist, function(x) is.factor(x) || is.character(x)
 grouped_features <- names(trimmed_hist)[grouped_cols]
 
 grouped_summary <- lapply(grouped_features, function(col) {
-  tab <- table(trimmed_hist[[col]], useNA = "no") 
-  data.frame(
-    Feature = col,
-    Level = names(tab),
-    Count = as.integer(tab)
-  )
+  tab <- table(trimmed_hist[[col]])
+  df <- as.data.frame(tab)
+  names(df) <- c("Level", "Count")
+  df$Feature <- col
+  return(df)
 })
 
 hist_feature_summary <- do.call(rbind, grouped_summary)
+wide_hist_summary <- pivot_wider(hist_feature_summary,
+                                  names_from = Level,
+                                  values_from = Count,
+                                  values_fill = NA)
+
+wide_hist_summary <- wide_hist_summary[order(wide_hist_summary$Feature), ]
+
+print(wide_hist_summary)
+
 ```
 
 Check the (sample) variance and select for low variance 
@@ -130,7 +371,6 @@ nzv <- nearZeroVar(trimmed_hist)
 filtered_df <- df[, -nzv] 
 ```
 
-
 Create a table of samples in each group for clinical features. 
 ```{r}
 trimmed_clin <- as.data.frame(clin_var[, -1])
@@ -156,7 +396,6 @@ grouped_summary <- lapply(grouped_features, function(col) {
 clin_feature_summary <- do.call(rbind, grouped_summary)
 ```
 
-
 Correlation Plots
 
 Phenotype:
@@ -166,6 +405,7 @@ phenotypes <- names(hist_var)[-1]
 cor_matrix <- cor(combined[, phenotypes], use = "pairwise.complete.obs", method = "kendall") 
 pheatmap(cor_matrix, cluster_rows = TRUE, cluster_cols = TRUE)
 ```
+*include all features in correlation plot
 
 Clinical features:
 ```{r}
@@ -219,7 +459,7 @@ binaryfrequencytable <- as.data.frame(binaryfrequencytable)
 
 ```
 
-phi coeffecient above 0.5 is a strong coeffecient
+phi coeffecient above 0.5 is a strong coefficient
 ```{r}
 col <- colnames(binaryfrequencytable)
 
@@ -232,6 +472,7 @@ for (i in 1:(length(col) - 1)) {
   }
 }
 ```
+
 Check missingness rate
 ```{r}
 missing_rate <- colSums(is.na(trimmed_hist)) / nrow(trimmed_hist)

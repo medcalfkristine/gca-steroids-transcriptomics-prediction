@@ -1,0 +1,532 @@
+---
+title: "Covariate Analysis"
+output: html_document
+---
+
+Load relevant data. 
+```{r,  include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(scales)
+library(broom)
+library(gridExtra)
+library(tibble)
+library(stringr)
+library(forestplot)
+library(grid)
+
+clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+names(hist_var)[names(hist_var) == "Lymphocytic_infiltrate_in._adventitia"] <- "Lymphocytic_infiltrate_in_adventitia"
+
+combined <- merge(clin_var, hist_var, by = "ID")
+
+```
+
+Remove features with high correlation, low variance, or low usefulness: 
+• Any_granulomatous_infiltrate
+• PALI
+• Any_lymphocytic_infiltrate
+• GCA_present
+• Granulomatous_infiltrate_in_media
+• Hyperplasia
+• Fibrosis
+
+```{r}
+cols_to_remove <- c("Any_granulomatous_infiltrate", "PALI", "Any_lymphocytic_infiltrate", "GCA_present", "Granulomatous_infiltrate_in_media", "Hyperplasia", "Fibrosis")
+hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
+trimmed_hist <- as.data.frame(hist_var[, -1])
+```
+
+MODEL TYPES:
+Logistic Models: continuous or categorical features, binary outcomes
+Linear Models: continuous (or encoded categorical) features, continuous outcomes
+Classification Models: continuous or categorical features, categorical outcomes 
+
+Variables:
+Steroids_days → continuous
+Sex → binary
+Age (quartiles) → categorical (ordinal)
+
+Modeling each outcome:
+Binary features → Steroids_days: Linear model
+Binary features → Sex: Logistic model
+Binary features → Age (quartiles): Classification model
+
+Group different feature types (binary or categorical)
+```{r}
+trimmed_hist <- hist_var[, -1]  
+
+# retrieve binary
+binary_features <- c()
+for (col in names(trimmed_hist)) {
+  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
+    binary_features <- c(binary_features, col)
+  }
+}
+
+# retrieve categorical
+categorical_features <- setdiff(names(trimmed_hist), binary_features)
+
+for (col in c(binary_features, categorical_features)) {
+  combined[[col]] <- factor(combined[[col]])
+}
+all_features <- c(binary_features, categorical_features)
+
+```
+
+Steroid Exposure Models
+```{r}
+# create a linear model for each feature and store in df
+steroid_model <- lapply(all_features, function(feature) {
+  lm(as.formula(paste("steroids_days ~", feature)), data = combined)
+})
+
+# name each linear model (row) in df according to feature
+names(steroid_model) <- all_features
+
+# retrieve all relevant data for each steroid model
+steroid_summary <- lapply(seq_along(steroid_model), function(i) {
+  model <- steroid_model[[i]]
+  feature <- all_features[i]
+  coef_summary <- summary(model)$coefficients
+  coef_summary <- coef_summary[rownames(coef_summary) != "(Intercept)", , drop = FALSE]
+
+  data.frame(
+    feature = if (feature %in% categorical_features) rownames(coef_summary) else feature,
+    estimate = coef_summary[, "Estimate"],
+    lowerCI = coef_summary[, "Estimate"] - 1.96 * coef_summary[, "Std. Error"],
+    upperCI = coef_summary[, "Estimate"] + 1.96 * coef_summary[, "Std. Error"],
+    pvalue = coef_summary[, "Pr(>|t|)"]
+  )
+})
+
+steroid_summary <- do.call(rbind, steroid_summary)
+steroid_summary$AdjP <- p.adjust(steroid_summary$pvalue, method = "fdr")
+```
+
+Sex Models
+```{r}
+# change sex into binary inputs
+combined$sex <- factor(combined$sex, levels = c(1, 2), labels = c("Male", "Female"))
+
+# create a logistic model for each feature and store in df
+sex_model <- lapply(all_features, function(feature) {
+  glm(as.formula(paste("sex ~", feature)), data = combined, family = binomial)
+})
+
+names(sex_model) <- all_features
+
+# retrieve all relevant data for each sex model
+sex_summary <- lapply(seq_along(sex_model), function(i) {
+  model <- sex_model[[i]]
+  feature <- all_features[i]
+  coef_summary <- summary(model)$coefficients
+  coef_summary <- coef_summary[rownames(coef_summary) != "(Intercept)", , drop = FALSE]
+
+  data.frame(
+    feature = if (feature %in% categorical_features) rownames(coef_summary) else feature,
+    estimate = exp(coef_summary[, "Estimate"]),
+    lowerCI = exp(coef_summary[, "Estimate"] - 1.96 * coef_summary[, "Std. Error"]),
+    upperCI = exp(coef_summary[, "Estimate"] + 1.96 * coef_summary[, "Std. Error"]),
+    pvalue = coef_summary[, "Pr(>|z|)"]
+  )
+})
+
+sex_summary <- do.call(rbind, sex_summary)
+sex_summary$AdjP <- p.adjust(sex_summary$pvalue, method = "fdr")
+```
+
+Age Models
+```{r}
+# ensure 1st level is used as baseline
+combined$Media_pattern      <- factor(combined$Media_pattern, levels = c("1", "2", "3"))
+combined$Intima_pattern     <- factor(combined$Intima_pattern, levels = c("1", "2", "3"))
+combined$Adventitia_pattern <- factor(combined$Adventitia_pattern, levels = c("1", "2", "3"))
+combined$Barcelona_score    <- factor(combined$Barcelona_score, levels = c("1", "2", "3", "4"))
+combined$Occlusion_grade    <- factor(combined$Occlusion_grade, levels = c("1", "2", "3", "4"))
+
+# group age into groups of 11 years
+min_age <- floor(min(combined$age, na.rm = TRUE))
+max_age <- ceiling(max(combined$age, na.rm = TRUE))
+eleven_year_breaks <- seq(min_age, max_age + 11, by = 11)
+
+combined$age_with_eleven_year_breaks <- cut(
+  combined$age,
+  breaks = eleven_year_breaks,
+  include.lowest = TRUE,
+  right = FALSE
+)
+
+levels(combined$age_with_eleven_year_breaks) <- c("<70", "70–80", ">80")
+
+# Fit model to data <- perform three glm (one for each age group) 
+# <70 used as baseline
+extract_glm_summary <- function(data, feature, level_label) {
+  formula <- as.formula(paste("binary_age ~", feature))
+  model <- glm(formula, data = data, family = binomial)
+
+  coefs <- summary(model)$coefficients
+  coefs <- coefs[rownames(coefs) != "(Intercept)", , drop = FALSE]
+
+  if (nrow(coefs) == 0) {
+    return(NULL)
+  }
+  
+  # retrieve model results and save to df
+  results <- lapply(seq_len(nrow(coefs)), function(i) {
+    row <- coefs[i, ]
+    est <- row["Estimate"]
+    se <- row["Std. Error"]
+    p <- row["Pr(>|z|)"]
+
+    data.frame(
+      Feature = feature,
+      Level = rownames(coefs)[i],
+      Contrast = level_label,
+      OR = exp(est),
+      LowerCI = exp(est - 1.96 * se),
+      UpperCI = exp(est + 1.96 * se),
+      PValue = p
+    )
+  })
+
+  do.call(rbind, results)
+}
+
+# combine all results
+results <- list()
+
+for (feature in all_features) {
+  # 70–80 vs <70
+  df_mid <- combined %>%
+    filter(age_with_eleven_year_breaks %in% c("<70", "70–80")) %>%
+    mutate(binary_age = factor(age_with_eleven_year_breaks, levels = c("<70", "70–80")))
+  res_mid <- extract_glm_summary(df_mid, feature, "70–80 vs <70")
+
+  # >80 vs <70
+  df_old <- combined %>%
+    filter(age_with_eleven_year_breaks %in% c("<70", ">80")) %>%
+    mutate(binary_age = factor(age_with_eleven_year_breaks, levels = c("<70", ">80")))
+  res_old <- extract_glm_summary(df_old, feature, ">80 vs <70")
+
+  results[[feature]] <- bind_rows(res_mid, res_old)
+}
+
+age_binary_summary <- bind_rows(results)
+age_binary_summary$AdjP <- p.adjust(age_binary_summary$PValue, method = "fdr")
+
+```
+
+
+Forest Plots
+
+Steroid Exposure Plots
+```{r}
+# change labels for categorical features
+occlusion_labels <- c("1" = "Minimal Occlusion", "2" = "Mild Occlusion",
+                      "3" = "Moderate Occlusion", "4" = "Severe Occlusion")
+
+barcelona_labels <- c("1" = "Grade I", "2" = "Grade II",
+                      "3" = "Grade III", "4" = "Grade IV")
+
+pattern_labels <- c("1" = "Regular", "2" = "Irregular", "3" = "Disrupted")
+
+feature_labels <- c(occlusion_labels, barcelona_labels, pattern_labels)
+
+base_data <- tibble(
+  mean  = steroid_summary$estimate,
+  lower = steroid_summary$lowerCI,
+  upper = steroid_summary$upperCI,
+  feature = steroid_summary$feature,
+  pvalue = steroid_summary$pvalue,
+  estimate_ci = paste0(
+    sprintf("%.2f", steroid_summary$estimate), " [",
+    sprintf("%.2f", steroid_summary$lowerCI), ", ",
+    sprintf("%.2f", steroid_summary$upperCI), "]"
+  )
+) %>%
+  mutate(
+    feature_clean = str_trim(str_to_lower(feature)),
+    feature_clean = str_replace_all(feature_clean, "_", " "),
+    feature_clean = case_when(
+      str_detect(feature_clean, "occlusion grade\\d") ~ paste0(
+        "Occlusion Grade: ", occlusion_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "barcelona score\\d") ~ paste0(
+        "Barcelona Score: ", barcelona_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "intima pattern\\d") ~ paste0(
+        "Intima Pattern: ", pattern_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "media pattern\\d") ~ paste0(
+        "Media Pattern: ", pattern_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "adventitia pattern\\d") ~ paste0(
+        "Adventitia Pattern: ", pattern_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      TRUE ~ str_to_title(feature_clean)
+    ),
+    pvalue_str = sprintf("%.3f", pvalue),
+    sig_star = ifelse(pvalue < 0.05, "*", ""),
+    feature_label = paste0(feature_clean, sig_star)
+  )
+
+data1 <- base_data[1:14, ]
+data2 <- base_data[15:28, ]
+
+labeltext1 <- rbind(
+  c("Feature", "Estimate (95% CI)", "P value"),
+  as.matrix(cbind(data1$feature_label, data1$estimate_ci, data1$pvalue_str))
+)
+
+labeltext2 <- rbind(
+  c("Feature", "Estimate (95% CI)", "P value"),
+  as.matrix(cbind(data2$feature_label, data2$estimate_ci, data2$pvalue_str))
+)
+
+mean1 <- c(NA, data1$mean)
+lower1 <- c(NA, data1$lower)
+upper1 <- c(NA, data1$upper)
+
+mean2 <- c(NA, data2$mean)
+lower2 <- c(NA, data2$lower)
+upper2 <- c(NA, data2$upper)
+
+# plot 1
+forestplot(
+  labeltext = labeltext1,
+  mean = mean1,
+  lower = lower1,
+  upper = upper1,
+  is.summary = c(TRUE, rep(FALSE, nrow(data1))),
+  boxsize = 0.2,
+  col = fpColors(box = "royalblue", line = "darkblue", zero = "red"),
+  xlog = FALSE,
+  clip = c(min(base_data$lower, na.rm = TRUE), max(base_data$upper, na.rm = TRUE)),
+  xticks = pretty(c(base_data$lower, base_data$upper)),
+  title = "Steroid Exposure Predictors (1 of 2)",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab = gpar(cex = 0.9)
+  )
+)
+
+# plot 2
+forestplot(
+  labeltext = labeltext2,
+  mean = mean2,
+  lower = lower2,
+  upper = upper2,
+  is.summary = c(TRUE, rep(FALSE, nrow(data2))),
+  boxsize = 0.2,
+  col = fpColors(box = "royalblue", line = "darkblue", zero = "red"),
+  xlog = FALSE,
+  clip = c(min(base_data$lower, na.rm = TRUE), max(base_data$upper, na.rm = TRUE)),
+  xticks = pretty(c(base_data$lower, base_data$upper)),
+  title = "Steroid Exposure Predictors (2 of 2)",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab = gpar(cex = 0.9)
+  )
+)
+
+```
+Sex Plots
+```{r}
+base_data <- tibble(
+  mean  = sex_summary$estimate,
+  lower = sex_summary$lowerCI,
+  upper = sex_summary$upperCI,
+  feature = sex_summary$feature,
+  pvalue = sex_summary$pvalue,
+  estimate_ci = paste0(
+    sprintf("%.2f", sex_summary$estimate), " [",
+    sprintf("%.2f", sex_summary$lowerCI), ", ",
+    sprintf("%.2f", sex_summary$upperCI), "]"
+  )
+) %>%
+  mutate(
+    feature_clean = str_trim(str_to_lower(feature)),
+    feature_clean = str_replace_all(feature_clean, "_", " "),
+    feature_clean = case_when(
+      str_detect(feature_clean, "occlusion grade\\d") ~ paste0(
+        "Occlusion Grade: ", occlusion_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "barcelona score\\d") ~ paste0(
+        "Barcelona Score: ", barcelona_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "intima pattern\\d") ~ paste0(
+        "Intima Pattern: ", pattern_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "media pattern\\d") ~ paste0(
+        "Media Pattern: ", pattern_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      str_detect(feature_clean, "adventitia pattern\\d") ~ paste0(
+        "Adventitia Pattern: ", pattern_labels[str_extract(feature_clean, "\\d+$")]
+      ),
+      TRUE ~ str_to_title(feature_clean)
+    ),
+    pvalue_str = sprintf("%.3f", pvalue),
+    sig_star = ifelse(pvalue < 0.05, "*", ""),
+    feature_label = paste0(feature_clean, sig_star)
+  )
+
+data1 <- base_data[1:14, ]
+data2 <- base_data[15:nrow(base_data), ]
+
+labeltext1 <- rbind(
+  c("Feature", "Estimate (95% CI)", "P Value"),
+  as.matrix(cbind(data1$feature_label, data1$estimate_ci, data1$pvalue_str))
+)
+
+labeltext2 <- rbind(
+  c("Feature", "Estimate (95% CI)", "P Value"),
+  as.matrix(cbind(data2$feature_label, data2$estimate_ci, data2$pvalue_str))
+)
+
+mean1 <- c(NA, data1$mean)
+lower1 <- c(NA, data1$lower)
+upper1 <- c(NA, data1$upper)
+
+mean2 <- c(NA, data2$mean)
+lower2 <- c(NA, data2$lower)
+upper2 <- c(NA, data2$upper)
+
+# plot 1
+forestplot(
+  labeltext = labeltext1,
+  mean = mean1,
+  lower = lower1,
+  upper = upper1,
+  is.summary = c(TRUE, rep(FALSE, nrow(data1))),
+  xlog = TRUE,
+  boxsize = 0.2,
+  col = fpColors(box = "darkblue", line = "blue", zero = "red"),
+  xticks = c(0.5, 1, 2, 4),
+  clip = c(0.1, 5),
+  title = "Histological Predictors of Patient Sex (1 of 2)",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab  = gpar(cex = 0.9)
+  )
+)
+
+# plot 2
+forestplot(
+  labeltext = labeltext2,
+  mean = mean2,
+  lower = lower2,
+  upper = upper2,
+  is.summary = c(TRUE, rep(FALSE, nrow(data2))),
+  xlog = TRUE,
+  boxsize = 0.2,
+  col = fpColors(box = "darkblue", line = "blue", zero = "red"),
+  xticks = c(0.5, 1, 2, 4),
+  clip = c(0.1, 5),
+  title = "Histological Predictors of Patient Sex (2 of 2)",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab  = gpar(cex = 0.9)
+  )
+)
+
+```
+
+
+Age Plots
+```{r}
+
+plot_data <- age_binary_summary %>%
+  mutate(
+    is_infinite = !is.finite(UpperCI) | !is.finite(LowerCI) | !is.finite(OR),
+    OR_CI = ifelse(
+      is_infinite,
+      "Unstable",
+      paste0(sprintf("%.2f", OR), " [", sprintf("%.2f", LowerCI), ", ", sprintf("%.2f", UpperCI), "]")
+    ),
+    
+    raw_feature = str_extract(Feature, "^[^:]+"),
+    feature_clean = str_to_lower(raw_feature),
+    feature_clean = str_replace_all(feature_clean, "[_:]", " "),
+    feature_clean = str_squish(feature_clean),
+    
+    feature_clean = case_when(
+      str_detect(feature_clean, "occlusion grade") ~ paste0(
+        "Occlusion Grade: ", occlusion_labels[str_extract(Level, "\\d+$")]
+      ),
+      str_detect(feature_clean, "barcelona score") ~ paste0(
+        "Barcelona Score: ", barcelona_labels[str_extract(Level, "\\d+$")]
+      ),
+      str_detect(feature_clean, "intima pattern") ~ paste0(
+        "Intima Pattern: ", pattern_labels[str_extract(Level, "\\d+$")]
+      ),
+      str_detect(feature_clean, "media pattern") ~ paste0(
+        "Media Pattern: ", pattern_labels[str_extract(Level, "\\d+$")]
+      ),
+      str_detect(feature_clean, "adventitia pattern") ~ paste0(
+        "Adventitia Pattern: ", pattern_labels[str_extract(Level, "\\d+$")]
+      ),
+      TRUE ~ str_to_title(feature_clean)
+    ),
+    
+    Contrast = factor(Contrast, levels = c("70–80 vs <70", ">80 vs <70")),
+    Label = paste0(feature_clean, " (", Contrast, ")"),
+    SigStar = ifelse(PValue < 0.05, "*", ""),
+    LabelFull = paste0(Label, SigStar),
+    Pval_str = sprintf("%.3f", PValue)
+  ) %>%
+  arrange(Contrast, feature_clean)
+
+
+n <- nrow(plot_data)
+chunk_size <- ceiling(n / 4)
+
+data1 <- plot_data[1:min(chunk_size, n), ]
+data2 <- plot_data[(chunk_size + 1):min(2 * chunk_size, n), ]
+data3 <- plot_data[(2 * chunk_size + 1):min(3 * chunk_size, n), ]
+data4 <- plot_data[(3 * chunk_size + 1):n, ]
+
+make_forest_plot <- function(data_chunk, title_text) {
+  if (nrow(data_chunk) == 0) return(NULL)
+
+  labeltext <- rbind(
+    c("Feature", "OR (95% CI)", "P Value"),
+    as.matrix(cbind(data_chunk$LabelFull, data_chunk$OR_CI, data_chunk$Pval_str))
+  )
+
+  forestplot(
+    labeltext = labeltext,
+    mean = c(NA, data_chunk$OR),
+    lower = c(NA, data_chunk$LowerCI),
+    upper = c(NA, data_chunk$UpperCI),
+    is.summary = c(TRUE, rep(FALSE, nrow(data_chunk))),
+    xlog = TRUE,
+    boxsize = 0.25,
+    xticks = c(0.5, 1, 2, 4),
+    clip = c(0.1, 10),
+    title = title_text,
+    txt_gp = fpTxtGp(
+      label = gpar(cex = 0.8),
+      ticks = gpar(cex = 0.8),
+      xlab  = gpar(cex = 0.9)
+    ),
+    col = fpColors(box = "navy", line = "blue", zero = "red")
+  )
+}
+
+make_forest_plot(data1, "Age Group Predictors (Plot 1 of 4)")
+make_forest_plot(data2, "Age Group Predictors (Plot 2 of 4)")
+make_forest_plot(data3, "Age Group Predictors (Plot 3 of 4)")
+make_forest_plot(data4, "Age Group Predictors (Plot 4 of 4)")
+
+
+```
+* level 1s are baselines and are therefore excluded from model summaries.
+
