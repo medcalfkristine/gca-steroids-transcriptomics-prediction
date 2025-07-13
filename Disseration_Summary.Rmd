@@ -1,0 +1,1135 @@
+---
+title: "Disseration Summary"
+author: "Kristine Medcalf"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+  pdf_document:
+    toc: true
+    toc_depth: 2
+
+---
+
+## 1. Introduction
+___
+
+
+## 2. Data Preparation
+___
+Two datasets were used:
+
+- **Clinical Variables**: contains variables regarding the individual such as age, sex, and steriod exposure (in days)
+- **Histological Variables**: contains variables of symptoms and other variables related to the disease.
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+library(tidyr)
+library(knitr)
+library(ggplot2)
+library(dplyr)
+library(MASS) 
+library(scales)
+library(broom)
+library(gridExtra)
+library(tibble)
+library(stringr)
+library(kableExtra)
+library(DESeq2)
+library(forestplot)
+library(biomaRt)
+library(grid)
+
+clin_var <-  read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+names(hist_var)[names(hist_var) == "Lymphocytic_infiltrate_in._adventitia"] <- "Lymphocytic_infiltrate_in_adventitia"
+```
+
+<details><summary><strong>View clinical variables</strong></summary>
+
+```{r, results='asis', echo=FALSE}
+vars <- names(clin_var)[-1]
+cat(paste0("- ", vars, collapse = "\n"))
+
+```
+
+</details>
+
+<pr>
+
+<details><summary><strong>View histological variables</strong></summary>
+
+```{r, results='asis', echo=FALSE}
+vars <- names(hist_var)[-1]
+cat(paste0("- ", vars, collapse = "\n"))
+cols_to_remove <- c("Any_granulomatous_infiltrate", "PALI", "Any_lymphocytic_infiltrate", "GCA_present", 'Barcelona_score')
+hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
+```
+</details>
+
+<pr>
+
+The data cleaning process focuses on identifying **redundant** and **collinear** variables within the histological dataset. Features with minimal variability or near-constant distributions were also removed, as they contributed little to the modeling process. These steps helped:
+
+- Reduce *noise* and *overfitting*
+- Improve *model interpretability* and *stability*
+- Lower the *risk of false positives* in downstream analyses
+
+Overall, this refinement ensured that each feature retained for analysis adds distinct and meaningful information.
+
+Specifically, the following variables were removed due to low variance, redundancy, or lack of added value:
+
+- **Any_granulomatous_infiltrate,**
+- **PALI,**
+- **Any_lymphocytic_infiltrate,**
+- **GCA_present,** and 
+- **Barcelona_score.**
+
+<pr>
+
+### 2.1 Exploratory Cross-Tabulations
+___
+
+<pr>
+
+#### 2.1.1 Stromal Features vs Occlusion Grade
+
+To assess redundancy among stromal response features, cross-tabulations were performed between Hyperplasia, Oedema, Fibrosis, and Occlusion Grade. These help determine whether a single variable (Occlusion Grade) can summarise similar information.
+
+```{r, echo=FALSE}
+tab1 <- as.data.frame.matrix(xtabs(~ Hyperplasia + Occlusion_grade, data = hist_var))
+tab1 <- rownames_to_column(tab1, var = "Hyperplasia")
+kable(tab1, caption = " ", row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "left", bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Occlusion Grade" = ncol(tab1) - 1))
+```
+
+```{r, echo=FALSE}
+tab1 <- as.data.frame.matrix(xtabs(~ Oedema + Occlusion_grade, data = hist_var))
+tab1 <- rownames_to_column(tab1, var = "Oedema")
+kable(tab1, caption = " ", row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "left", bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Occlusion Grade" = ncol(tab1) - 1))
+```
+
+```{r, echo=FALSE}
+tab1 <- as.data.frame.matrix(xtabs(~ Fibrosis + Occlusion_grade, data = hist_var))
+tab1 <- rownames_to_column(tab1, var = "Fibrosis")
+kable(tab1, caption = " ", row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "left", bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Occlusion Grade" = ncol(tab1) - 1))
+```
+
+These cross-tabulations demonstrate that Hyperplasia and Fibrosis are strongly associated with higher Occlusion Grades. Nearly all cases exhibiting Hyperplasia fall within Occlusion Grades 3 or 4, and Fibrosis follows a similar distribution pattern. This suggests that these features may be reflecting the same underlying stromal response.
+
+Given this overlap, it may be appropriate to retain Occlusion Grade as the primary stromal variable and exclude Hyperplasia and Fibrosis from further analysis. In contrast, Oedema shows a slightly more varied distribution across grades, which may indicate it captures an additional or distinct aspect of stromal change, and could therefore be retained.
+<pr>
+
+#### 2.1.2 Immune Cell Infiltrates vs Tissue Layer Patterns
+
+Cross-tabulations were also performed between lymphocytic infiltrate indicators and histological patterns in the adventitia, media, and intima layers. This helps identify whether these represent overlapping immune activity.
+
+```{r, echo=FALSE}
+tab1 <- as.data.frame.matrix(xtabs(~ Lymphocytic_infiltrate_in_adventitia + Adventitia_pattern, data = hist_var))
+tab1 <- rownames_to_column(tab1, var = "Lymphocytic_infiltrate_in_adventitia")
+kable(tab1, caption = " ", row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "left", bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Adventitia_pattern" = ncol(tab1) - 1))
+```
+
+```{r, echo=FALSE}
+tab1 <- as.data.frame.matrix(xtabs(~ Lymphocytic_infiltrate_in_media + Media_pattern, data = hist_var))
+tab1 <- rownames_to_column(tab1, var = "Lymphocytic_infiltrate_in_media")
+kable(tab1, caption = " ", row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "left", bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Media_pattern" = ncol(tab1) - 1))
+```
+
+```{r, echo=FALSE}
+tab1 <- as.data.frame.matrix(xtabs(~ Lymphocytic_infiltrate_in_intima + Intima_pattern, data = hist_var))
+tab1 <- rownames_to_column(tab1, var = "Lymphocytic_infiltrate_in_intima")
+kable(tab1, caption = " ", row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "left", bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Intima_pattern" = ncol(tab1) - 1))
+```
+
+The cross-tabulations reveal a strong alignment between lymphocytic infiltrates and their respective vessel wall patterns, specifically, the adventitia, media, and intima layers. For example, cases with lymphocytic infiltrate in the adventitia consistently correspond to higher values in the Adventitia Pattern variable. Similar trends are observed for the media and intima.
+
+This suggests that the pattern variables may already be capturing the presence and extent of lymphocytic infiltration within each vessel layer. Therefore, it may be appropriate to retain only the Adventitia/Media/Intima Pattern variables in downstream analyses, and drop the direct infiltrate indicators, as they likely do not add independent information.
+
+```{r, echo = FALSE}
+# Define columns to remove based on redundancy
+cols_to_remove <- c(
+  "Hyperplasia",
+  "Fibrosis",
+  "Lymphocytic_infiltrate_in_adventitia",
+  "Lymphocytic_infiltrate_in_media",
+  "Lymphocytic_infiltrate_in_intima"
+)
+
+# Remove them from the dataframe (if they exist)
+hist_var <- hist_var[, !(names(hist_var) %in% cols_to_remove)]
+```
+
+<pr>
+
+### 2.2 Variance Analysis
+<pr>
+
+#### 2.2.1 Frequency Tables
+
+To understand the data, we first summarized **histological features** by showing the frequency of each category.
+
+Only features with a small number of unique numeric values were treated as factors. This approach allowed a clearer summary of the data.
+
+<details><summary><strong>View summary table of feature distributions</strong></summary>
+
+*This includes the count of samples in each category across multiple histological variables.*
+
+```{r, echo = FALSE}
+trimmed_hist <- as.data.frame(hist_var[, -1])
+
+for (col in names(trimmed_hist)) {
+  if (is.numeric(trimmed_hist[[col]]) && length(unique(trimmed_hist[[col]])) < 10) {
+    trimmed_hist[[col]] <- as.factor(trimmed_hist[[col]])
+  }
+}
+
+grouped_cols <- sapply(trimmed_hist, function(x) is.factor(x) || is.character(x))
+grouped_features <- names(trimmed_hist)[grouped_cols]
+
+grouped_summary <- lapply(grouped_features, function(col) {
+  tab <- table(trimmed_hist[[col]])
+  df <- as.data.frame(tab)
+  names(df) <- c("Level", "Count")
+  df$Feature <- col
+  return(df)
+})
+
+hist_feature_summary <- do.call(rbind, grouped_summary)
+wide_hist_summary <- pivot_wider(hist_feature_summary,
+                                  names_from = Level,
+                                  values_from = Count,
+                                  values_fill = NA)
+
+wide_hist_summary <- wide_hist_summary[order(wide_hist_summary$Feature), ]
+
+knitr::kable(wide_hist_summary, caption = "Summary of Histological Feature Frequencies")
+
+```
+
+<pr>
+
+#### 2.2.2 Binary Concordance Calculations
+
+We computed the variance of each histological feature to identify features that do not vary much between samples. **Low-variance features** provide limited discriminative value. A range of features have variances close to 0. 
+
+<details><summary><strong>View histogram of histological feature variance</strong></summary>
+```{r, echo = FALSE}
+variances <- sapply(trimmed_hist, function(x) {
+  if (is.factor(x)) x <- as.numeric(x)
+  var(x, na.rm = TRUE)
+})
+
+hist(variances, 
+     main = "Histogram of Feature Variances",
+     xlab = "Variance", 
+     ylab = "Frequency",
+     col = "lightblue", 
+     breaks = 50, 
+     xlim = c(0, 2))
+
+```
+
+</details>
+
+<pr>
+
+```{r, echo = FALSE}
+low_var_01 <- data.frame(sort(variances[variances < 0.1]))
+names(low_var_01) <- c('Variance')
+
+knitr::kable(low_var_01, caption = "Low Variance Histological Features")
+
+```
+
+Since these features exhibit extremely low variance, they are unlikely to contribute meaningful information to the analysis and can therefore be removed.
+
+```{r, echo = FALSE}
+cols_to_remove <- c(
+  "Aggregates",
+  "Granulomatous_infiltrate_in_media",
+  "Granulomatous_infiltrate_in_intima",
+  "Granulomatous_infiltrate_in_adventitia"
+)
+
+hist_var <- hist_var[, !(names(hist_var) %in% cols_to_remove)]
+```
+<pr>
+
+### 2.3. Correlation Analysis
+___
+
+<pr>
+
+#### 2.3.1 Correlation Heatmap
+
+We computed a **correlation matrix** across the remaining numeric histological features and visualized it as a heatmap. Strong correlations between features may indicate redundancy.
+
+```{r, echo=FALSE}
+library(pheatmap)
+phenotypes <- names(hist_var)[-1]
+cor_matrix <- cor(hist_var[, phenotypes], use = "pairwise.complete.obs")
+rownames(cor_matrix) <- phenotypes
+colnames(cor_matrix) <- phenotypes
+pheatmap(cor_matrix,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         cellheight = 8,
+         fontsize_row = 7, 
+         fontsize_col = 7)
+```
+
+There seems to be an area of high correlation with the different layers of pattern, occlusion_grade, and media_destruction. 
+
+#### 2.3.2 Correlation Calculation
+
+To further assess redundancy, we analyzed **binary features** using the **phi coefficient**, a statistical measure of association between two binary variables.
+
+- A phi coefficient **> 0.5** is considered strong.
+- Values **> 0.8** are flagged for possible removal due to redundancy.
+
+```{r, echo=FALSE}
+binary_features <- c()
+for (col in names(trimmed_hist)) {
+  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
+    binary_features <- c(binary_features, col)
+  }
+}
+
+phi_coefficient <- function(x, y) {
+  tab <- table(x, y)
+  if (!all(dim(tab) == c(2, 2))) {
+    return(NA)
+  }
+  a <- tab[1,1]; b <- tab[1,2]; c <- tab[2,1]; d <- tab[2,2]
+  num <- (a * d) - (b * c)
+  denom <- sqrt((a + b) * (c + d) * (a + c) * (b + d))
+  if (denom == 0) return(NA)
+  return(num / denom)
+}
+
+n <- length(binary_features)
+binaryfrequencytable <- matrix(NA, nrow = n, ncol = n)
+colnames(binaryfrequencytable) <- binary_features
+rownames(binaryfrequencytable) <- binary_features
+diag(binaryfrequencytable) <- 1
+
+df <- as.data.frame(lapply(trimmed_hist[binary_features], factor))
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    phi <- phi_coefficient(df[[i]], df[[j]])
+    binaryfrequencytable[i, j] <- phi
+    binaryfrequencytable[j, i] <- phi
+  }
+}
+
+binaryfrequencytable <- as.data.frame(binaryfrequencytable)
+```
+
+<details><summary><strong>View matrix of phi coefficients</strong></summary>
+
+```{r, echo = FALSE}
+knitr::kable(binaryfrequencytable, caption = "Binary Frequency Table")
+```
+
+*This matrix includes pairwise concordance scores between binary features.*
+
+</details>
+
+<pr>
+
+```{r, echo=FALSE}
+get_high_phi_pairs <- function(phi_matrix, threshold = 0.5) {
+  cols <- colnames(phi_matrix)
+  pairs <- list()
+  
+  for (i in 1:(length(cols) - 1)) {
+    for (j in (i + 1):length(cols)) {
+      val <- phi_matrix[i, j]
+      if (!is.na(val) && abs(val) > threshold) {
+        pairs[[length(pairs) + 1]] <- data.frame(
+          Feature1 = cols[i],
+          Feature2 = cols[j],
+          Phi = val
+        )
+      }
+    }
+  }
+  do.call(rbind, pairs)
+}
+
+high_phi_pairs <- get_high_phi_pairs(binaryfrequencytable, threshold = 0.5)
+```
+```{r, echo = FALSE}
+knitr::kable(high_phi_pairs, caption = "Stong Phi Coeffecient Pairs")
+```
+
+While several pairs of binary features have Phi coefficients greater than 0.5, none exceed the redundancy threshold of 0.8. This suggests that although some variables are moderately correlated, there is no strong evidence of multicollinearity. Therefore, no features need to be removed based on Phi correlation alone.
+
+<pr>
+
+## 3. Covariate Analysis
+___
+To evaluate the potential confounding effects of demographic and treatment variables, we conducted covariate analysis using logistic models with steroid exposure, age, and sex as predictors.
+
+### 3.1 Collapsing Categorical Features
+
+In order to do this, all categorical histological variables were converted to binary format for modeling purposes.
+
+For the three variables reflecting inflammation severity across arterial layers (adventitia, media, intima), values were grouped as follows:
+
+- 0 and 1 were merged into a single category representing low or no inflammation
+- 2 and 3 were combined to represent more severe inflammation
+
+For the variable representing the degree of arterial occlusion, categories were grouped into:
+
+- 0 and 1: Minimal or no occlusion
+- 2, 3, and 4: Moderate to severe occlusion
+
+
+```{r, echo=FALSE}
+
+# Recode inflammation severity
+hist_var$Adventitia_pattern_bin <- ifelse(hist_var$Adventitia_pattern %in% c(0, 1), 0, 1)
+hist_var$Media_pattern_bin      <- ifelse(hist_var$Media_pattern %in% c(0, 1), 0, 1)
+hist_var$Intima_pattern_bin     <- ifelse(hist_var$Intima_pattern %in% c(0, 1), 0, 1)
+
+hist_var$Occlusion_Grade_bin <- ifelse(
+  is.na(hist_var$Occlusion_grade), NA,
+  ifelse(hist_var$Occlusion_grade %in% c(0, 1), 0, 1)
+)
+
+
+all_features <- c()
+for (col in names(hist_var)) {
+  if (length(levels(factor(hist_var[[col]]))) == 2) {
+    all_features <- c(all_features, col)
+  }
+}
+
+combined <- merge(clin_var, hist_var, by = "ID")
+hist_var <- as.data.frame(hist_var[, -1])
+
+```
+
+### 3.2 Regression Models
+
+#### 3.2.1 Steroid Exposure Models
+___
+We examined the association between steroid treatment duration (measured in days) and each binary histological feature using logistic regression. 
+
+```{r, echo=FALSE, warning=FALSE}
+# Fit logistic model for each binary feature with steroid_days as predictor
+steroid_model <- lapply(all_features, function(feature) {
+  glm(as.formula(paste(feature, "~ steroids_days")), 
+      family = binomial(link = "logit"), 
+      data = combined)
+})
+
+# Name each model
+names(steroid_model) <- all_features
+
+# Summarize results
+steroid_summary <- lapply(seq_along(steroid_model), function(i) {
+  model <- steroid_model[[i]]
+  feature <- all_features[i]
+  coef_summary <- summary(model)$coefficients
+  steroid_row <- rownames(coef_summary) == "steroids_days"
+
+  data.frame(
+    feature = feature,
+    OR = exp(coef_summary[steroid_row, "Estimate"]),
+    lowerCI = exp(coef_summary[steroid_row, "Estimate"] - 1.96 * coef_summary[steroid_row, "Std. Error"]),
+    upperCI = exp(coef_summary[steroid_row, "Estimate"] + 1.96 * coef_summary[steroid_row, "Std. Error"]),
+    pvalue = coef_summary[steroid_row, "Pr(>|z|)"],
+    group0 = sum(combined[[feature]] == 0, na.rm = TRUE),
+    group1 = sum(combined[[feature]] == 1, na.rm = TRUE)
+  )
+})
+
+# Combine and adjust p-values
+steroid_summary <- do.call(rbind, steroid_summary)
+steroid_summary$AdjP <- p.adjust(steroid_summary$pvalue, method = "fdr")
+```
+
+<details><summary><strong>View steriod expsure model results</strong></summary>
+```{r, echo=FALSE}
+knitr::kable(steroid_summary, caption = "Steriod Exposure Model Results")
+```
+</details>
+
+```{r, echo=FALSE, fig.width=12, fig.height=7}
+# Prepare base data frame with odds ratios
+base_data <- tibble(
+  mean  = steroid_summary$OR,       # OR
+  lower = steroid_summary$lowerCI,        # Lower 95% CI
+  upper = steroid_summary$upperCI,        # Upper 95% CI
+  feature = steroid_summary$feature,
+  pvalue_raw = steroid_summary$pvalue,
+  pvalue_adj = steroid_summary$AdjP,
+  estimate_ci = paste0(
+    sprintf("%.2f", steroid_summary$OR), " [",
+    sprintf("%.2f", steroid_summary$lowerCI), ", ",
+    sprintf("%.2f", steroid_summary$upperCI), "]"
+  ),
+  group0 = steroid_summary$group0,
+  group1 = steroid_summary$group1
+
+) %>%
+  mutate(
+    feature_clean = str_replace_all(feature, "_", " "),
+    feature_clean = str_remove(feature_clean, " ?bin$"),
+    feature_clean = str_to_title(feature_clean),
+    
+    pvalue_str = sprintf("%.3f", pvalue_raw),
+    adj_pvalue_str = sprintf("%.3f", pvalue_adj),
+    sig_star = ifelse(pvalue_raw < 0.05, "*", ""),
+    feature_label = paste0(feature_clean, sig_star),
+    sample_sizes = sapply(steroid_summary$feature, function(f) {sum(!is.na(combined[[f]]))}),
+    group0 = paste(group0,"/", sample_sizes, sep = ""),
+    group1 = paste(group1,"/", sample_sizes, sep = "")
+
+  )
+
+# Create label text
+labeltext <- rbind(
+  c("Feature", "Negative", "Positive", "OR [95% CI]", "P-Value", "Adj. P-Value"),
+  as.matrix(cbind(
+    base_data$feature_label,
+    base_data$group0,
+    base_data$group1,
+    base_data$estimate_ci,
+    base_data$pvalue_str,
+    base_data$adj_pvalue_str  ))
+)
+
+# Add NA to align rows with label header
+mean_all  <- c(NA, base_data$mean)
+lower_all <- c(NA, base_data$lower)
+upper_all <- c(NA, base_data$upper)
+
+
+# Forest plot
+forestplot(
+  labeltext = labeltext,
+  mean = mean_all,
+  lower = lower_all,
+  upper = upper_all,
+  is.summary = c(TRUE, rep(FALSE, nrow(base_data))),
+  boxsize = 0.2,
+  col = fpColors(box = "slateblue4", line = "mediumorchid4", zero = "red"),
+  xlog = TRUE,  # log scale for odds ratios
+  clip = c(min(base_data$lower, na.rm = TRUE), max(base_data$upper, na.rm = TRUE)),
+  xticks = pretty(c(base_data$lower, base_data$upper)),
+  title = "Impact of Steroid Exposure on Vascular Histopathology",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab = gpar(cex = 0.9)
+  ))
+
+grid.text("*P-values adjusted with Benjamini-Hochberg (FDR) procedure", x = 0.01, y = unit(0.1, "npc") - unit(2, "lines"), 
+          just = "left", gp = gpar(cex = 0.8, col = "black"))
+
+```
+
+
+#### 3.2.2 Sex Models
+___
+We assessed whether patient sex (male vs. female) was associated with histological features using logistic regression.
+
+```{r, echo=FALSE}
+combined$sex_binary <- ifelse(combined$sex == 2, 1, 
+                              ifelse(combined$sex == 1, 0, NA))
+
+# Fit logistic models: feature ~ sex_binary
+sex_model <- lapply(all_features, function(feature) {
+  glm(as.formula(paste(feature, "~ sex_binary")), data = combined, family = binomial)
+})
+
+# Name the models by feature
+names(sex_model) <- all_features
+
+# Extract effect estimates, CIs, and p-values
+sex_summary <- lapply(seq_along(sex_model), function(i) {
+  model <- sex_model[[i]]
+  feature <- all_features[i]
+
+  # Get coefficient summary safely
+  coef_summary <- tryCatch(summary(model)$coefficients, error = function(e) NULL)
+
+  # Skip if model failed or sex_binary is not in the result
+  if (is.null(coef_summary) || !"sex_binary" %in% rownames(coef_summary)) {
+    return(NULL)
+  }
+
+  data.frame(
+    feature = feature,
+    OR = exp(coef_summary["sex_binary", "Estimate"]),
+    lowerCI = exp(coef_summary["sex_binary", "Estimate"] - 1.96 * coef_summary["sex_binary", "Std. Error"]),
+    upperCI = exp(coef_summary["sex_binary", "Estimate"] + 1.96 * coef_summary["sex_binary", "Std. Error"]),
+    pvalue = coef_summary["sex_binary", "Pr(>|z|)"],
+    group0 = sum(combined[[feature]] == 0, na.rm = TRUE),
+    group1 = sum(combined[[feature]] == 1, na.rm = TRUE)
+  )
+})
+
+# Remove any NULLs (failed models)
+sex_summary <- do.call(rbind, sex_summary)
+sex_summary$AdjP <- p.adjust(sex_summary$pvalue, method = "fdr")
+```
+
+<details><summary><strong>View sex model results</strong></summary>
+```{r, echo=FALSE}
+knitr::kable(sex_summary, caption = "Sex Model Results")
+```
+</details>
+
+```{r, echo=FALSE, fig.width=12, fig.height=7}
+sex_base_data <- tibble(
+  mean  = sex_summary$OR,
+  lower = sex_summary$lowerCI,
+  upper = sex_summary$upperCI,
+  feature = sex_summary$feature,
+  pvalue_raw = sex_summary$pvalue,
+  pvalue_adj = sex_summary$AdjP,
+  estimate_ci = paste0(
+    sprintf("%.2f", sex_summary$OR), " [",
+    sprintf("%.2f", sex_summary$lowerCI), ", ",
+    sprintf("%.2f", sex_summary$upperCI), "]"
+  ),
+  group0 = steroid_summary$group0,
+  group1 = steroid_summary$group1
+) %>%
+  mutate(
+    feature_clean = str_replace_all(feature, "_", " "),
+    feature_clean = str_remove(feature_clean, " ?bin$"),
+    feature_clean = str_to_title(feature_clean),
+    pvalue_str = sprintf("%.3f", pvalue_raw),
+    adj_pvalue_str = sprintf("%.3f", pvalue_adj),
+    sig_star = ifelse(pvalue_raw < 0.05, "*", ""),
+    feature_label = paste0(feature_clean, sig_star),
+    sample_sizes = sapply(sex_summary$feature, function(f) {sum(!is.na(combined[[f]]))}),
+    group0 = paste(group0,"/", sample_sizes, sep = ""),
+    group1 = paste(group1,"/", sample_sizes, sep = "")
+
+  )
+
+
+# Filter NA or problematic values
+sex_base_data <- sex_base_data %>%
+  filter(!is.na(mean) & !is.na(lower) & !is.na(upper))
+
+# Label matrix
+sex_labeltext <- rbind(
+  c("Feature", "Negative", "Positive", "OR [95% CI]", "P-Value", "Adj. P-Value"),
+  as.matrix(cbind(
+    sex_base_data$feature_label,
+    base_data$group0,
+    base_data$group1,
+    sex_base_data$estimate_ci,
+    sex_base_data$pvalue_str,
+    sex_base_data$adj_pvalue_str
+  ))
+)
+
+# Prepare values
+mean_all  <- c(NA, sex_base_data$mean)
+lower_all <- c(NA, sex_base_data$lower)
+upper_all <- c(NA, sex_base_data$upper)
+
+
+# Plot on linear scale
+forestplot(
+  labeltext = sex_labeltext,
+  mean = mean_all,
+  lower = lower_all,
+  upper = upper_all,
+  is.summary = c(TRUE, rep(FALSE, nrow(sex_base_data))),
+  boxsize = 0.2,
+  col = fpColors(box =  "royalblue", line = "darkblue", zero = "red"),
+  xlog = FALSE,  # linear scale for log-odds
+  clip = c(min(lower_all, na.rm = TRUE), max(upper_all, na.rm = TRUE)),
+  xticks = pretty(c(min(lower_all, na.rm = TRUE), max(upper_all, na.rm = TRUE))),
+  title = "Influence of Patient Sex on Histological Features",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab = gpar(cex = 0.9)
+  )
+)
+
+grid.text("*P-values adjusted with Benjamini-Hochberg (FDR) procedure", x = 0.01, y = unit(0.1, "npc") - unit(2, "lines"), 
+          just = "left", gp = gpar(cex = 0.8, col = "black"))
+
+
+
+```
+
+
+#### 3.2.3 Age Models
+___
+Next, we modeled each binary histological feature as a function of age.
+
+```{r, echo=FALSE}
+# Loop over binary outcome features
+age_model <- lapply(all_features, function(feature) {
+  glm(as.formula(paste(feature, "~ age")), data = combined, family = binomial)
+})
+
+names(age_model) <- all_features
+
+# Extract ORs, CIs, and p-values
+age_summary <- lapply(seq_along(age_model), function(i) {
+  model <- age_model[[i]]
+  feature <- all_features[i]
+
+  coef_summary <- tryCatch(summary(model)$coefficients, error = function(e) NULL)
+
+  if (is.null(coef_summary) || !"age" %in% rownames(coef_summary)) {
+    return(NULL)
+  }
+
+  est <- coef_summary["age", "Estimate"]
+  se <- coef_summary["age", "Std. Error"]
+  pval <- coef_summary["age", "Pr(>|z|)"]
+
+  data.frame(
+    Feature = feature,
+    Predictor = "Age",
+    OR = exp(est),
+    LowerCI = exp(est - 1.96 * se),
+    UpperCI = exp(est + 1.96 * se),
+    PValue = pval,
+    group0 = sum(combined[[feature]] == 0, na.rm = TRUE),
+    group1 = sum(combined[[feature]] == 1, na.rm = TRUE)
+  )
+})
+
+# Combine and adjust p-values
+age_summary <- do.call(rbind, age_summary)
+age_summary$AdjP <- p.adjust(age_summary$PValue, method = "fdr")
+
+```
+
+<details><summary><strong>View age model results</strong></summary>
+```{r, echo=FALSE}
+knitr::kable(age_summary, caption = "Age Model Results")
+```
+</details>
+
+```{r, echo=FALSE, fig.width=12, fig.height=7}
+# Prepare the data for forestplot
+age_base_data <- tibble(
+  mean  = age_summary$OR,
+  lower = age_summary$LowerCI,
+  upper = age_summary$UpperCI,
+  feature = age_summary$Feature,
+  pvalue_raw = age_summary$PValue,
+  pvalue_adj = age_summary$AdjP,
+  estimate_ci = paste0(
+    sprintf("%.2f", age_summary$OR), " [",
+    sprintf("%.2f", age_summary$LowerCI), ", ",
+    sprintf("%.2f", age_summary$UpperCI), "]"
+  ),
+  group0 = steroid_summary$group0,
+  group1 = steroid_summary$group1
+) %>%
+  mutate(
+    # Clean and label features
+    feature_clean = str_replace_all(feature, "_", " "),
+    feature_clean = str_remove(feature_clean, " ?bin$"),
+    feature_clean = str_to_title(feature_clean),
+
+    # Format p-values
+    pvalue_str = sprintf("%.3f", pvalue_raw),
+    adj_pvalue_str = sprintf("%.3f", pvalue_adj),
+    sig_star = ifelse(pvalue_raw < 0.05, "*", ""),
+    feature_label = paste0(feature_clean, sig_star),
+    sample_sizes = sapply(age_summary$Feature, function(f) {sum(!is.na(combined[[f]]))}),
+    group0 = paste(group0,"/", sample_sizes, sep = ""),
+    group1 = paste(group1,"/", sample_sizes, sep = "")
+  )
+
+
+# Prepare the label text for the forest plot
+age_labeltext <- rbind(
+  c("Feature", "Negative", "Positive", "OR [95% CI]", "P-Value", "Adj. P-Value"),
+  as.matrix(cbind(
+    age_base_data$feature_label,
+    base_data$group0,
+    base_data$group1,
+    age_base_data$estimate_ci,
+    age_base_data$pvalue_str,
+    age_base_data$adj_pvalue_str
+    ))
+)
+
+
+# Add NA to align with the header row
+mean_all  <- c(NA, age_base_data$mean)
+lower_all <- c(NA, age_base_data$lower)
+upper_all <- c(NA, age_base_data$upper)
+
+# Safe clipping range
+min_val <- max(min(age_base_data$lower, na.rm = TRUE), 0.01)
+max_val <- max(age_base_data$upper, na.rm = TRUE)
+
+
+# Forest plot
+forestplot(
+  labeltext = age_labeltext,
+  mean = mean_all,
+  lower = lower_all,
+  upper = upper_all,
+  is.summary = c(TRUE, rep(FALSE, nrow(age_base_data))),
+  boxsize = 0.2,
+  col = fpColors(box = "darkgreen", line = "forestgreen", zero = "red"),
+  xlog = TRUE,
+  clip = c(min_val, max_val),
+  xticks = pretty(c(min_val, max_val)),
+  title = "Impact of Age on Vascular Histopathology",
+  txt_gp = fpTxtGp(
+    label = gpar(cex = 0.8),
+    ticks = gpar(cex = 0.8),
+    xlab  = gpar(cex = 0.9)
+  )
+)
+
+grid.text("*P-values adjusted with Benjamini-Hochberg (FDR) procedure", x = 0.01, y = unit(0.1, "npc") - unit(2, "lines"), 
+          just = "left", gp = gpar(cex = 0.8, col = "black"))
+
+```
+
+
+### 3.3 Interpretation of Results
+Across all three models (age, sex, and steroid exposure), no histological features reached statistical significance. These results indicate that, within this cohort, these demographic and treatment variables are not associated with variation in histopathological features and may not serve as meaningful covariates in subsequent analyses.
+
+## 4. Differential Gene Expression
+
+Comparisons Include: True negative controls (GCA = 0) vs. steroid exposure of
+
+- less than 3 days (0, 1, 2 days)
+- 3-4 days
+- 5-7 days
+- more than 7 days
+
+```{r, echo=FALSE}
+gene_data <-read.table("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_cc_c1_c2_GENCODE.txt")
+
+gene_data <- round(as.matrix(gene_data))  # round to nearest integer
+mode(gene_data) <- "numeric"              # ensure numeric mode
+# need to ask if raw counts? cause why decimal?
+clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+
+combined <- merge(clin_var, hist_var)
+
+combined <- combined %>%
+  mutate(steroid_group = case_when(
+    is.na(steroids_days)         ~ NA_character_,
+    GCA_present == 0             ~ "true_negative",
+    steroids_days < 3            ~ "less_3",
+    steroids_days < 5            ~ "days_3_4",
+    steroids_days < 8            ~ "days_5_6_7",
+    steroids_days >= 8           ~ "more_7"
+  ))
+
+```
+
+
+### 4.1 Steriod Exposure of Less than 3 days
+
+```{r, echo=FALSE, message=FALSE}
+
+df <- combined %>%
+  filter(steroid_group %in% c("less_3", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "less_3"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "less_3", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+<details><summary><strong>View Results Ordered By Significance </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+### 4.2 Steriod Exposure Between 3 to 4 Days
+
+```{r, echo=FALSE, message=FALSE}
+
+df <- combined %>%
+  filter(steroid_group %in% c("days_3_4", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_3_4"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "days_3_4", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+<details><summary><strong>View Results Ordered By Significance </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+### 4.3 Steriod Exposure Between 5 to 7 Days
+
+```{r, echo=FALSE, message=FALSE}
+
+df <- combined %>%
+  filter(steroid_group %in% c("days_5_6_7", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_5_6_7"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "days_5_6_7", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+<details><summary><strong>View Results Ordered By Significance </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+### 4.4 Steriod Exposure of More than 7 Days
+
+```{r, echo=FALSE, message=FALSE}
+
+df <- combined %>%
+  filter(steroid_group %in% c("more_7", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "more_7"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "more_7", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+<details><summary><strong>View Results Ordered By Significance </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+```{r, echo=FALSE}
+knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+```
+</details>
+
+```{r}
+library(pheatmap)
+ntd <- vst(dds, blind = TRUE)
+top_genes <- head(foldchange_genes$gene, 20)
+mat <- assay(ntd)[top_genes, ]
+gene_symbols <- foldchange_genes$hgnc_symbol[match(top_genes, foldchange_genes$gene)]
+rownames(mat) <- ifelse(is.na(gene_symbols), top_genes, gene_symbols)
+pheatmap(mat,
+         annotation_col = coldata,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         show_rownames = TRUE,
+         scale = "row")
+```
+
+

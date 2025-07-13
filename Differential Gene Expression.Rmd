@@ -1,0 +1,330 @@
+---
+title: "Differential Gene Expression"
+output: html_document
+---
+
+```{r}
+library(tximport)
+library(readr)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(stringr)
+library(ggplot2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(clusterProfiler)
+library(enrichplot)
+library(dplyr)
+library(patchwork)
+```
+
+```{r}
+gene_data <-read.table("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_cc_c1_c2_GENCODE.txt")
+ncol(hist_var)
+colnames(hist_var)
+```
+
+Control vs GCA 
+```{r}
+condition <- c()
+
+for (name in names(gene_data)) {
+  if (str_sub(name, -2) == 'c1' | str_sub(name, -2) == 'c2') {
+    condition <- c(condition, 'GCA') 
+  } else {
+    condition <- c(condition, 'Control')
+  }
+}
+
+condition <- factor(condition, levels = c("Control", "GCA"))
+
+
+sample <- names(gene_data)
+
+coldata <- data.frame(sample = sample, condition = condition)
+coldata
+
+gene_data <- round(as.matrix(gene_data))  # round to nearest integer
+mode(gene_data) <- "numeric"              # ensure numeric mode
+# need to ask if raw counts? cause why decimal?
+
+dds <- DESeqDataSetFromMatrix(countData = gene_data,
+                              colData = coldata,
+                              design = ~ condition)
+
+dds <- DESeq(dds)
+
+
+res <- results(dds, contrast = c("condition", "GCA", "Control"))
+res_df <- as.data.frame(res)              
+res_df$gene <- rownames(res_df)           
+
+res_df$gene_symbol <- mapIds(org.Hs.eg.db,
+                                keys = rownames(res_df),
+                                column = "SYMBOL",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+sig_genes <- res_df[!is.na(res_df$pvalue) & res_df$pvalue < 0.05, ]
+sig_genes <- sig_genes[, c("gene_symbol", "log2FoldChange", "pvalue", "padj")]
+
+# nothing significant when adjusted
+```
+
+Sort steroid exposure
+```{r}
+
+combined <- combined %>%
+  mutate(steroid_group = case_when(
+    is.na(steroids_days)         ~ NA_character_,
+    GCA_present == 0             ~ "true_negative",
+    steroids_days < 3            ~ "less_3",
+    steroids_days < 5            ~ "days_3_4",
+    steroids_days < 8            ~ "days_5_6_7",
+    steroids_days >= 8           ~ "more_7"
+  ))
+
+```
+
+
+less than 3
+```{r}
+
+df <- combined %>%
+  filter(steroid_group %in% c("less_3", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "less_3"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "less_3", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+3-4
+```{r}
+
+df <- combined %>%
+  filter(steroid_group %in% c("days_3_4", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_3_4"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "days_3_4", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+days_5_6_7
+```{r}
+df <- combined %>%
+  filter(steroid_group %in% c("days_5_6_7", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_5_6_7"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "days_5_6_7", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+
+more_7
+```{r}
+df <- combined %>%
+  filter(steroid_group %in% c("more_7", "true_negative"))
+
+col_ids <- str_sub(colnames(gene_data), 2)
+df_filtered <- df[df$ID %in% col_ids, ]
+
+df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+
+gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+
+coldata <- data.frame(
+  row.names = paste0("X", df_filtered$ID),
+  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "more_7"))
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data_filtered,
+  colData = coldata,
+  design = ~ steroid_group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("steroid_group", "more_7", "true_negative"))
+
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = res_df$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_annotated <- merge(
+  res_df,
+  annotations,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+
+foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+```
+
+```{r}
+library(pheatmap)
+ntd <- vst(dds, blind = TRUE)
+top_genes <- head(foldchange_genes$gene, 20)
+mat <- assay(ntd)[top_genes, ]
+gene_symbols <- foldchange_genes$hgnc_symbol[match(top_genes, foldchange_genes$gene)]
+rownames(mat) <- ifelse(is.na(gene_symbols), top_genes, gene_symbols)
+pheatmap(mat,
+         annotation_col = coldata,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         show_rownames = TRUE,
+         scale = "row")
+```
+
+for each plot
+- heatmap of top 25 (Heatmap of the count matrix)
+- Heatmap of the sample-to-sample distances
+- MA-plot
+- Plot counts
+
+# might have to go through a manually put not found genes
+
+https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#why-un-normalized-counts

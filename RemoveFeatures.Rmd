@@ -114,15 +114,19 @@ text(x = hist_result_tertiles$mids,
 
 Based on 11 year breaks: creates 3 groups with most even split
 ```{r}
+hist(combined$age,main = "Histogram of Age", xlab = "Age", col = "steelblue")
+table(combined$age)
 min_age <- floor(min(combined$age, na.rm = TRUE))
 max_age <- ceiling(max(combined$age, na.rm = TRUE))
 
-eleven_year_breaks <- seq(min_age, max_age + 11, by = 11)
+eleven_year_breaks <- seq(min_age, max_age + 10, by = 10)
 
 combined$age_with_eleven_year_breaks <- cut(combined$age,
                                breaks = eleven_year_breaks,
                                include.lowest = TRUE,
                                right = FALSE)
+
+table(combined$age_with_eleven_year_breaks)
 
 hist_result_eleven_years <- hist(combined$age,
      breaks = eleven_year_breaks,
@@ -225,7 +229,9 @@ hist(steroid_trimmed,
 
 Clinical perspective
 ```{r}
-breaks <- c(min(steroid_trimmed, na.rm = TRUE), 5, 10, max(steroid_trimmed, na.rm = TRUE) + 1)
+breaks <- c(min(steroid_trimmed, na.rm = TRUE), 2, 10, max(steroid_trimmed, na.rm = TRUE) + 1)
+breaks <- seq(min(steroid_trimmed, na.rm = TRUE), max(steroid_trimmed, na.rm = TRUE), by = 1)
+
 
 hist_steroid_clinical <- hist(steroid_trimmed,
      breaks = breaks,
@@ -285,6 +291,8 @@ text(x = hist_result_quintiles$mids,
      col = "black",
      pos = 3,
      cex = 0.9)
+
+table(steroid_trimmed)
 ```
 
 Based on quartiles.
@@ -362,6 +370,10 @@ hist(variances,
      col = "lightblue", 
      breaks = 50, 
      xlim = c(0, 2))
+
+low_var_01 <- data.frame(sort(variances[variances < 0.1]))
+names(low_var_01) <- c('Variance')
+low_var_01
 ```
 
 Double-check using nearZeroVar()
@@ -402,8 +414,15 @@ Phenotype:
 ```{r}
 library(pheatmap)
 phenotypes <- names(hist_var)[-1]
-cor_matrix <- cor(combined[, phenotypes], use = "pairwise.complete.obs", method = "kendall") 
-pheatmap(cor_matrix, cluster_rows = TRUE, cluster_cols = TRUE)
+cor_matrix <- cor(hist_var[, phenotypes], use = "pairwise.complete.obs")
+rownames(cor_matrix) <- phenotypes
+colnames(cor_matrix) <- phenotypes
+pheatmap(cor_matrix,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         cellheight = 8,
+         fontsize_row = 7, 
+         fontsize_col = 7)
 ```
 *include all features in correlation plot
 
@@ -462,15 +481,23 @@ binaryfrequencytable <- as.data.frame(binaryfrequencytable)
 phi coeffecient above 0.5 is a strong coefficient
 ```{r}
 col <- colnames(binaryfrequencytable)
+remove_corr <- data.frame(Feature1 = character(), Feature2 = character(), Correlation = numeric(), stringsAsFactors = FALSE)
 
 for (i in 1:(length(col) - 1)) {
-  for (j in (i + 1):length(col)) {
-    val <- binaryfrequencytable[i, j]
-    if (!is.na(val) && val > 0.8) {
-      cat(paste("Feature 1:",col[i], "\nFeature 2:", col[j], "\nPhi = ", round(val, 3), "\n\n"))
-    }
-  }
+for (j in (i + 1):length(col)) {
+ val <- binaryfrequencytable[i, j]
+ if (!is.na(val) && val > 0.8) {
+   remove_corr <- rbind(remove_corr, data.frame(
+     Feature1 = col[i],
+     Feature2 = col[j],
+     Correlation = round(val, 3)
+   ))
+   cat(paste("Feature 1:", col[i], "\nFeature 2:", col[j], "\nPhi =", round(val, 3), "\n\n"))
+ }
 }
+}
+
+remove_corr
 ```
 
 Check missingness rate
@@ -481,3 +508,44 @@ sort(missing_rate, decreasing = TRUE)
 ```
 
 Remove: Granulomatous_infiltrate_in_media, Hyperplasia, Fibrosis
+
+Cross-Tabulation 
+```{r}
+library(writexl)
+infiltrates <- data.frame(
+  Adventitia = combined$Granulomatous_infiltrate_in_adventitia,
+  Intima     = combined$Granulomatous_infiltrate_in_intima,
+  Media      = combined$Granulomatous_infiltrate_in_media,
+  Aggregates = combined$Aggregates
+)
+#write_xlsx(infiltrates, "infiltrates.xlsx")
+
+patterns <- data.frame(
+  Adventitia = combined$Media_pattern,
+  Intima     = combined$Intima_pattern,
+  Media      = combined$Adventitia_pattern)
+
+# write_xlsx(patterns, "patterns.xlsx")
+
+lymph <- data.frame(
+  Adventitia = combined$Lymphocytic_infiltrate_in_adventitia,
+  Intima     = combined$Lymphocytic_infiltrate_in_intima,
+  Media      = combined$Lymphocytic_infiltrate_in_media, 
+  Hyperplasia = combined$Hyperplasia,
+  Fibrosis = combined$Fibrosis)
+
+# write_xlsx(lymph, "lymph.xlsx")
+
+
+others <- data.frame(
+  Adventitia = combined$Lymphocytic_infiltrate_in_adventitia,
+  Intima     = combined$Lymphocytic_infiltrate_in_intima,
+  AdventitiaPattern      = combined$Adventitia_pattern, 
+  IntimaPattern      = combined$Intima_pattern, 
+  BarcelonaScore      = combined$Barcelona_score, 
+  OcclusionGrade      = combined$Occlusion_grade, 
+  MediaDestruction      = combined$Media_destruction)
+
+# write_xlsx(others, "others.xlsx")
+
+```
