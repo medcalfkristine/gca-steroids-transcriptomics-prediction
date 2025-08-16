@@ -6,6 +6,7 @@ Loading clinical features and histological features.
 ```{r}
 clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
 hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+length(names(hist_var))-1
 names(hist_var)[names(hist_var) == "Lymphocytic_infiltrate_in._adventitia"] <- "Lymphocytic_infiltrate_in_adventitia"
 combined <- merge(clin_var, hist_var, by = "ID")
 ```
@@ -435,69 +436,66 @@ numeric_clin <- numeric_clin[, apply(numeric_clin, 2, function(x) var(x, na.rm =
 cor_matrix_clin <- cor(numeric_clin, use = "pairwise.complete.obs", method = "kendall") 
 pheatmap(cor_matrix_clin, display_numbers = TRUE, cluster_rows = TRUE, cluster_cols = TRUE)
 ```
-
-Use 2x2 frequency tables to analyze correlation between binary features? 
-Use phi coeffecient as a measure of concordance 
+Use kendall coeffecient as a measure of concordance 
 
 ```{r}
-binary_features <- c()
-for (col in names(trimmed_hist)) {
-  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
-    binary_features <- c(binary_features, col)
+library(stats)  
+
+# Select the features you want to include (binary + ordinal)
+features <- names(hist_var[-1])
+
+# Convert all to numeric (binary becomes 0/1, ordinal keeps order if factors are ordered)
+df <- as.data.frame(lapply(hist_var[features], function(x) {
+  if (is.factor(x)) {
+    as.numeric(x)  # Keeps order if it's an ordered factor
+  } else {
+    as.numeric(x)
   }
-}
+}))
 
-phi_coefficient <- function(x, y) {
-  tab <- table(x, y)
-  if (!all(dim(tab) == c(2, 2))) {
-    return(NA)
-  }
-  a <- tab[1,1]; b <- tab[1,2]; c <- tab[2,1]; d <- tab[2,2]
-  num <- (a * d) - (b * c)
-  denom <- sqrt((a + b) * (c + d) * (a + c) * (b + d))
-  if (denom == 0) return(NA)
-  return(num / denom)
-}
+n <- length(features)
+kendall_matrix <- matrix(NA, nrow = n, ncol = n)
+colnames(kendall_matrix) <- features
+rownames(kendall_matrix) <- features
+diag(kendall_matrix) <- 1
 
-n <- length(binary_features)
-binaryfrequencytable <- matrix(NA, nrow = n, ncol = n)
-colnames(binaryfrequencytable) <- binary_features
-rownames(binaryfrequencytable) <- binary_features
-diag(binaryfrequencytable) <- 1
-
-df <- as.data.frame(lapply(trimmed_hist[binary_features], factor))
 for (i in 1:(n - 1)) {
   for (j in (i + 1):n) {
-    phi <- phi_coefficient(df[[i]], df[[j]])
-    binaryfrequencytable[i, j] <- phi
-    binaryfrequencytable[j, i] <- phi
+    tau <- suppressWarnings(cor(df[[i]], df[[j]], 
+                                 method = "kendall", 
+                                 use = "pairwise.complete.obs"))
+    kendall_matrix[i, j] <- tau
+    kendall_matrix[j, i] <- tau
   }
 }
 
-binaryfrequencytable <- as.data.frame(binaryfrequencytable)
+kendall_matrix <- as.data.frame(kendall_matrix)
 
 ```
 
-phi coeffecient above 0.5 is a strong coefficient
+tau coeffecient above 0.5 is a strong coefficient
 ```{r}
-col <- colnames(binaryfrequencytable)
-remove_corr <- data.frame(Feature1 = character(), Feature2 = character(), Correlation = numeric(), stringsAsFactors = FALSE)
+remove_corr <- data.frame(Feature1 = character(), 
+                          Feature2 = character(), 
+                          Correlation = numeric(), 
+                          stringsAsFactors = FALSE)
 
-for (i in 1:(length(col) - 1)) {
-for (j in (i + 1):length(col)) {
- val <- binaryfrequencytable[i, j]
- if (!is.na(val) && val > 0.8) {
-   remove_corr <- rbind(remove_corr, data.frame(
-     Feature1 = col[i],
-     Feature2 = col[j],
-     Correlation = round(val, 3)
-   ))
-   cat(paste("Feature 1:", col[i], "\nFeature 2:", col[j], "\nPhi =", round(val, 3), "\n\n"))
- }
-}
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    val <- kendall_matrix[i, j]
+    if (!is.na(val) && val > 0.5) {
+      remove_corr <- rbind(remove_corr, data.frame(
+        Feature1 = colnames(kendall_matrix)[i],
+        Feature2 = colnames(kendall_matrix)[j],
+        Correlation = round(val, 3),
+        stringsAsFactors = FALSE
+      ))
+    }
+  }
 }
 
 remove_corr
+
 ```
 
 Check missingness rate

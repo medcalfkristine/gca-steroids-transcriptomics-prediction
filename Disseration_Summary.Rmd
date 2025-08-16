@@ -8,20 +8,21 @@ output:
     toc_depth: 3
   pdf_document:
     toc: true
-    toc_depth: 2
-
+    toc_depth: 4
 ---
 
 ## 1. Introduction
-___
 
+------------------------------------------------------------------------
 
 ## 2. Data Preparation
-___
+
+------------------------------------------------------------------------
+
 Two datasets were used:
 
-- **Clinical Variables**: contains variables regarding the individual such as age, sex, and steriod exposure (in days)
-- **Histological Variables**: contains variables of symptoms and other variables related to the disease.
+-   **Clinical Variables**: contains variables regarding the individual such as age, sex, and steriod exposure (in days)
+-   **Histological Variables**: contains variables of symptoms and other variables related to the disease.
 
 ```{r, echo=FALSE, message = FALSE, warning=FALSE}
 library(tidyr)
@@ -33,11 +34,19 @@ library(scales)
 library(broom)
 library(gridExtra)
 library(tibble)
+library(ggrepel)
 library(stringr)
 library(kableExtra)
 library(DESeq2)
 library(forestplot)
+library(ggVennDiagram)
 library(biomaRt)
+library(clusterProfiler)
+library(ggvenn)
+library(patchwork)
+library(UpSetR)
+library(ComplexUpset)
+library(org.Hs.eg.db)
 library(grid)
 
 clin_var <-  read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
@@ -45,19 +54,22 @@ hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GC
 names(hist_var)[names(hist_var) == "Lymphocytic_infiltrate_in._adventitia"] <- "Lymphocytic_infiltrate_in_adventitia"
 ```
 
-<details><summary><strong>View clinical variables</strong></summary>
+<details>
+
+<summary><strong>View clinical variables</strong></summary>
 
 ```{r, results='asis', echo=FALSE}
 vars <- names(clin_var)[-1]
 cat(paste0("- ", vars, collapse = "\n"))
-
 ```
 
 </details>
 
 <pr>
 
-<details><summary><strong>View histological variables</strong></summary>
+<details>
+
+<summary><strong>View histological variables</strong></summary>
 
 ```{r, results='asis', echo=FALSE}
 vars <- names(hist_var)[-1]
@@ -65,30 +77,32 @@ cat(paste0("- ", vars, collapse = "\n"))
 cols_to_remove <- c("Any_granulomatous_infiltrate", "PALI", "Any_lymphocytic_infiltrate", "GCA_present", 'Barcelona_score')
 hist_var <- hist_var[, setdiff(names(hist_var), cols_to_remove)]
 ```
+
 </details>
 
 <pr>
 
 The data cleaning process focuses on identifying **redundant** and **collinear** variables within the histological dataset. Features with minimal variability or near-constant distributions were also removed, as they contributed little to the modeling process. These steps helped:
 
-- Reduce *noise* and *overfitting*
-- Improve *model interpretability* and *stability*
-- Lower the *risk of false positives* in downstream analyses
+-   Reduce *noise* and *overfitting*
+-   Improve *model interpretability* and *stability*
+-   Lower the *risk of false positives* in downstream analyses
 
 Overall, this refinement ensured that each feature retained for analysis adds distinct and meaningful information.
 
 Specifically, the following variables were removed due to low variance, redundancy, or lack of added value:
 
-- **Any_granulomatous_infiltrate,**
-- **PALI,**
-- **Any_lymphocytic_infiltrate,**
-- **GCA_present,** and 
-- **Barcelona_score.**
+-   **Any_granulomatous_infiltrate,**
+-   **PALI,**
+-   **Any_lymphocytic_infiltrate,**
+-   **GCA_present,** and
+-   **Barcelona_score.**
 
 <pr>
 
 ### 2.1 Exploratory Cross-Tabulations
-___
+
+------------------------------------------------------------------------
 
 <pr>
 
@@ -122,8 +136,7 @@ kable(tab1, caption = " ", row.names = FALSE) %>%
 
 These cross-tabulations demonstrate that Hyperplasia and Fibrosis are strongly associated with higher Occlusion Grades. Nearly all cases exhibiting Hyperplasia fall within Occlusion Grades 3 or 4, and Fibrosis follows a similar distribution pattern. This suggests that these features may be reflecting the same underlying stromal response.
 
-Given this overlap, it may be appropriate to retain Occlusion Grade as the primary stromal variable and exclude Hyperplasia and Fibrosis from further analysis. In contrast, Oedema shows a slightly more varied distribution across grades, which may indicate it captures an additional or distinct aspect of stromal change, and could therefore be retained.
-<pr>
+Given this overlap, it may be appropriate to retain Occlusion Grade as the primary stromal variable and exclude Hyperplasia and Fibrosis from further analysis. In contrast, Oedema shows a slightly more varied distribution across grades, which may indicate it captures an additional or distinct aspect of stromal change, and could therefore be retained. <pr>
 
 #### 2.1.2 Immune Cell Infiltrates vs Tissue Layer Patterns
 
@@ -174,6 +187,7 @@ hist_var <- hist_var[, !(names(hist_var) %in% cols_to_remove)]
 <pr>
 
 ### 2.2 Variance Analysis
+
 <pr>
 
 #### 2.2.1 Frequency Tables
@@ -182,7 +196,9 @@ To understand the data, we first summarized **histological features** by showing
 
 Only features with a small number of unique numeric values were treated as factors. This approach allowed a clearer summary of the data.
 
-<details><summary><strong>View summary table of feature distributions</strong></summary>
+<details>
+
+<summary><strong>View summary table of feature distributions</strong></summary>
 
 *This includes the count of samples in each category across multiple histological variables.*
 
@@ -222,22 +238,47 @@ knitr::kable(wide_hist_summary, caption = "Summary of Histological Feature Frequ
 
 #### 2.2.2 Binary Concordance Calculations
 
-We computed the variance of each histological feature to identify features that do not vary much between samples. **Low-variance features** provide limited discriminative value. A range of features have variances close to 0. 
+We computed the variance of each histological feature to identify features that do not vary much between samples. **Low-variance features** provide limited discriminative value. A range of features have variances close to 0.
 
-<details><summary><strong>View histogram of histological feature variance</strong></summary>
+<details>
+
+<summary><strong>View histogram of histological feature variance</strong></summary>
+
 ```{r, echo = FALSE}
 variances <- sapply(trimmed_hist, function(x) {
   if (is.factor(x)) x <- as.numeric(x)
   var(x, na.rm = TRUE)
 })
 
-hist(variances, 
-     main = "Histogram of Feature Variances",
-     xlab = "Variance", 
-     ylab = "Frequency",
-     col = "lightblue", 
-     breaks = 50, 
-     xlim = c(0, 2))
+
+variances_df <- data.frame(
+  Feature = names(variances),
+  Variance = round(as.numeric(variances), 3)  # Round to 3 decimal places (you can change this)
+)
+
+# Save as CSV
+write.csv(variances_df, "feature_variances.csv", row.names = FALSE)
+
+hist(variances,
+     breaks = 20,                      # more bins = smoother shape
+     col = "cadetblue",                  # soft, clean color
+     main = "Distribution of Feature Variances",
+     xlab = "Variance",
+     ylab = "Number of Features",
+     las = 1,                          # horizontal axis labels
+     cex.main = 1.2,                   # bigger title
+     cex.lab = 1.1,                    # bigger axis labels
+     cex.axis = 0.9                   # slightly smaller axis text
+)
+
+abline(v = 0.1, col = "red", lwd = 2, lty = 2)
+legend("topright",
+       legend = "Variance Threshold = 0.1",
+       col = "red",
+       lty = 2,
+       lwd = 2,
+       bty = "n")
+
 
 ```
 
@@ -265,10 +306,12 @@ cols_to_remove <- c(
 
 hist_var <- hist_var[, !(names(hist_var) %in% cols_to_remove)]
 ```
+
 <pr>
 
 ### 2.3. Correlation Analysis
-___
+
+------------------------------------------------------------------------
 
 <pr>
 
@@ -285,62 +328,61 @@ colnames(cor_matrix) <- phenotypes
 pheatmap(cor_matrix,
          cluster_rows = TRUE,
          cluster_cols = TRUE,
-         cellheight = 8,
+         cellheight = 6.5,
          fontsize_row = 7, 
          fontsize_col = 7)
 ```
 
-There seems to be an area of high correlation with the different layers of pattern, occlusion_grade, and media_destruction. 
+There seems to be an area of high correlation with the different layers of pattern, occlusion_grade, and media_destruction.
 
 #### 2.3.2 Correlation Calculation
 
-To further assess redundancy, we analyzed **binary features** using the **phi coefficient**, a statistical measure of association between two binary variables.
+To further assess redundancy, we analyzed **binary features** using the **tau coefficient**, a statistical measure of association between two binary variables.
 
-- A phi coefficient **> 0.5** is considered strong.
-- Values **> 0.8** are flagged for possible removal due to redundancy.
+-   A tau coefficient **\> 0.5** is considered strong.
+-   Values **\> 0.8** are flagged for possible removal due to redundancy.
 
 ```{r, echo=FALSE}
-binary_features <- c()
-for (col in names(trimmed_hist)) {
-  if (length(levels(factor(trimmed_hist[[col]]))) == 2) {
-    binary_features <- c(binary_features, col)
+library(stats)  
+
+# Select the features you want to include (binary + ordinal)
+features <- names(hist_var[-1])
+
+# Convert all to numeric (binary becomes 0/1, ordinal keeps order if factors are ordered)
+df <- as.data.frame(lapply(hist_var[features], function(x) {
+  if (is.factor(x)) {
+    as.numeric(x)  # Keeps order if it's an ordered factor
+  } else {
+    as.numeric(x)
   }
-}
+}))
 
-phi_coefficient <- function(x, y) {
-  tab <- table(x, y)
-  if (!all(dim(tab) == c(2, 2))) {
-    return(NA)
-  }
-  a <- tab[1,1]; b <- tab[1,2]; c <- tab[2,1]; d <- tab[2,2]
-  num <- (a * d) - (b * c)
-  denom <- sqrt((a + b) * (c + d) * (a + c) * (b + d))
-  if (denom == 0) return(NA)
-  return(num / denom)
-}
+n <- length(features)
+kendall_matrix <- matrix(NA, nrow = n, ncol = n)
+colnames(kendall_matrix) <- features
+rownames(kendall_matrix) <- features
+diag(kendall_matrix) <- 1
 
-n <- length(binary_features)
-binaryfrequencytable <- matrix(NA, nrow = n, ncol = n)
-colnames(binaryfrequencytable) <- binary_features
-rownames(binaryfrequencytable) <- binary_features
-diag(binaryfrequencytable) <- 1
-
-df <- as.data.frame(lapply(trimmed_hist[binary_features], factor))
 for (i in 1:(n - 1)) {
   for (j in (i + 1):n) {
-    phi <- phi_coefficient(df[[i]], df[[j]])
-    binaryfrequencytable[i, j] <- phi
-    binaryfrequencytable[j, i] <- phi
+    tau <- suppressWarnings(cor(df[[i]], df[[j]], 
+                                 method = "kendall", 
+                                 use = "pairwise.complete.obs"))
+    kendall_matrix[i, j] <- tau
+    kendall_matrix[j, i] <- tau
   }
 }
 
-binaryfrequencytable <- as.data.frame(binaryfrequencytable)
+kendall_matrix <- as.data.frame(kendall_matrix)
+
 ```
 
-<details><summary><strong>View matrix of phi coefficients</strong></summary>
+<details>
+
+<summary><strong>View matrix of tau coefficients</strong></summary>
 
 ```{r, echo = FALSE}
-knitr::kable(binaryfrequencytable, caption = "Binary Frequency Table")
+knitr::kable(kendall_matrix, caption = "Binary Frequency Table")
 ```
 
 *This matrix includes pairwise concordance scores between binary features.*
@@ -350,37 +392,40 @@ knitr::kable(binaryfrequencytable, caption = "Binary Frequency Table")
 <pr>
 
 ```{r, echo=FALSE}
-get_high_phi_pairs <- function(phi_matrix, threshold = 0.5) {
-  cols <- colnames(phi_matrix)
-  pairs <- list()
-  
-  for (i in 1:(length(cols) - 1)) {
-    for (j in (i + 1):length(cols)) {
-      val <- phi_matrix[i, j]
-      if (!is.na(val) && abs(val) > threshold) {
-        pairs[[length(pairs) + 1]] <- data.frame(
-          Feature1 = cols[i],
-          Feature2 = cols[j],
-          Phi = val
-        )
-      }
+remove_corr <- data.frame(Feature1 = character(), 
+                          Feature2 = character(), 
+                          Correlation = numeric(), 
+                          stringsAsFactors = FALSE)
+
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    val <- kendall_matrix[i, j]
+    if (!is.na(val) && val > 0.5) {
+      remove_corr <- rbind(remove_corr, data.frame(
+        Feature1 = colnames(kendall_matrix)[i],
+        Feature2 = colnames(kendall_matrix)[j],
+        Correlation = round(val, 3),
+        stringsAsFactors = FALSE
+      ))
     }
   }
-  do.call(rbind, pairs)
 }
 
-high_phi_pairs <- get_high_phi_pairs(binaryfrequencytable, threshold = 0.5)
-```
-```{r, echo = FALSE}
-knitr::kable(high_phi_pairs, caption = "Stong Phi Coeffecient Pairs")
+remove_corr
 ```
 
-While several pairs of binary features have Phi coefficients greater than 0.5, none exceed the redundancy threshold of 0.8. This suggests that although some variables are moderately correlated, there is no strong evidence of multicollinearity. Therefore, no features need to be removed based on Phi correlation alone.
+```{r, echo = FALSE}
+knitr::kable(remove_corr, caption = "Stong Tau Coeffecient Pairs")
+```
+
+While several pairs of binary features have tau coefficients greater than 0.5, none exceed the redundancy threshold of 0.8. This suggests that although some variables are moderately correlated, there is no strong evidence of multicollinearity. Therefore, no features need to be removed based on tau correlation alone.
 
 <pr>
 
 ## 3. Covariate Analysis
-___
+
+------------------------------------------------------------------------
+
 To evaluate the potential confounding effects of demographic and treatment variables, we conducted covariate analysis using logistic models with steroid exposure, age, and sex as predictors.
 
 ### 3.1 Collapsing Categorical Features
@@ -389,14 +434,13 @@ In order to do this, all categorical histological variables were converted to bi
 
 For the three variables reflecting inflammation severity across arterial layers (adventitia, media, intima), values were grouped as follows:
 
-- 0 and 1 were merged into a single category representing low or no inflammation
-- 2 and 3 were combined to represent more severe inflammation
+-   0 and 1 were merged into a single category representing low or no inflammation
+-   2 and 3 were combined to represent more severe inflammation
 
 For the variable representing the degree of arterial occlusion, categories were grouped into:
 
-- 0 and 1: Minimal or no occlusion
-- 2, 3, and 4: Moderate to severe occlusion
-
+-   0 and 1: Minimal or no occlusion
+-   2, 3, and 4: Moderate to severe occlusion
 
 ```{r, echo=FALSE}
 
@@ -426,8 +470,10 @@ hist_var <- as.data.frame(hist_var[, -1])
 ### 3.2 Regression Models
 
 #### 3.2.1 Steroid Exposure Models
-___
-We examined the association between steroid treatment duration (measured in days) and each binary histological feature using logistic regression. 
+
+------------------------------------------------------------------------
+
+We examined the association between steroid treatment duration (measured in days) and each binary histological feature using logistic regression.
 
 ```{r, echo=FALSE, warning=FALSE}
 # Fit logistic model for each binary feature with steroid_days as predictor
@@ -463,18 +509,21 @@ steroid_summary <- do.call(rbind, steroid_summary)
 steroid_summary$AdjP <- p.adjust(steroid_summary$pvalue, method = "fdr")
 ```
 
-<details><summary><strong>View steriod expsure model results</strong></summary>
+<details>
+
+<summary><strong>View steriod expsure model results</strong></summary>
+
 ```{r, echo=FALSE}
 knitr::kable(steroid_summary, caption = "Steriod Exposure Model Results")
 ```
+
 </details>
 
 ```{r, echo=FALSE, fig.width=12, fig.height=7}
-# Prepare base data frame with odds ratios
 base_data <- tibble(
-  mean  = steroid_summary$OR,       # OR
-  lower = steroid_summary$lowerCI,        # Lower 95% CI
-  upper = steroid_summary$upperCI,        # Upper 95% CI
+  mean  = steroid_summary$OR,       
+  lower = steroid_summary$lowerCI,        
+  upper = steroid_summary$upperCI,        
   feature = steroid_summary$feature,
   pvalue_raw = steroid_summary$pvalue,
   pvalue_adj = steroid_summary$AdjP,
@@ -502,9 +551,8 @@ base_data <- tibble(
 
   )
 
-# Create label text
 labeltext <- rbind(
-  c("Feature", "Negative", "Positive", "OR [95% CI]", "P-Value", "Adj. P-Value"),
+  c("Feature", "Absent", "Present", "OR [95% CI]", "P-Value", "Adj. P-Value"),
   as.matrix(cbind(
     base_data$feature_label,
     base_data$group0,
@@ -514,7 +562,6 @@ labeltext <- rbind(
     base_data$adj_pvalue_str  ))
 )
 
-# Add NA to align rows with label header
 mean_all  <- c(NA, base_data$mean)
 lower_all <- c(NA, base_data$lower)
 upper_all <- c(NA, base_data$upper)
@@ -532,6 +579,7 @@ forestplot(
   xlog = TRUE,  # log scale for odds ratios
   clip = c(min(base_data$lower, na.rm = TRUE), max(base_data$upper, na.rm = TRUE)),
   xticks = pretty(c(base_data$lower, base_data$upper)),
+  lineheight = unit(0.6, "cm"),  
   title = "Impact of Steroid Exposure on Vascular Histopathology",
   txt_gp = fpTxtGp(
     label = gpar(cex = 0.8),
@@ -544,9 +592,10 @@ grid.text("*P-values adjusted with Benjamini-Hochberg (FDR) procedure", x = 0.01
 
 ```
 
-
 #### 3.2.2 Sex Models
-___
+
+------------------------------------------------------------------------
+
 We assessed whether patient sex (male vs. female) was associated with histological features using logistic regression.
 
 ```{r, echo=FALSE}
@@ -590,10 +639,14 @@ sex_summary <- do.call(rbind, sex_summary)
 sex_summary$AdjP <- p.adjust(sex_summary$pvalue, method = "fdr")
 ```
 
-<details><summary><strong>View sex model results</strong></summary>
+<details>
+
+<summary><strong>View sex model results</strong></summary>
+
 ```{r, echo=FALSE}
 knitr::kable(sex_summary, caption = "Sex Model Results")
 ```
+
 </details>
 
 ```{r, echo=FALSE, fig.width=12, fig.height=7}
@@ -633,7 +686,7 @@ sex_base_data <- sex_base_data %>%
 
 # Label matrix
 sex_labeltext <- rbind(
-  c("Feature", "Negative", "Positive", "OR [95% CI]", "P-Value", "Adj. P-Value"),
+  c("Feature", "Absent", "Present", "OR [95% CI]", "P-Value", "Adj. P-Value"),
   as.matrix(cbind(
     sex_base_data$feature_label,
     base_data$group0,
@@ -657,11 +710,13 @@ forestplot(
   lower = lower_all,
   upper = upper_all,
   is.summary = c(TRUE, rep(FALSE, nrow(sex_base_data))),
-  boxsize = 0.2,
+  boxsize = 0.3,
   col = fpColors(box =  "royalblue", line = "darkblue", zero = "red"),
+  zero = 1,  # <-- this sets the line at 1 instead of 0
   xlog = FALSE,  # linear scale for log-odds
   clip = c(min(lower_all, na.rm = TRUE), max(upper_all, na.rm = TRUE)),
   xticks = pretty(c(min(lower_all, na.rm = TRUE), max(upper_all, na.rm = TRUE))),
+  lineheight = unit(0.6, "cm"),  
   title = "Influence of Patient Sex on Histological Features",
   txt_gp = fpTxtGp(
     label = gpar(cex = 0.8),
@@ -677,9 +732,10 @@ grid.text("*P-values adjusted with Benjamini-Hochberg (FDR) procedure", x = 0.01
 
 ```
 
-
 #### 3.2.3 Age Models
-___
+
+------------------------------------------------------------------------
+
 Next, we modeled each binary histological feature as a function of age.
 
 ```{r, echo=FALSE}
@@ -723,10 +779,14 @@ age_summary$AdjP <- p.adjust(age_summary$PValue, method = "fdr")
 
 ```
 
-<details><summary><strong>View age model results</strong></summary>
+<details>
+
+<summary><strong>View age model results</strong></summary>
+
 ```{r, echo=FALSE}
 knitr::kable(age_summary, caption = "Age Model Results")
 ```
+
 </details>
 
 ```{r, echo=FALSE, fig.width=12, fig.height=7}
@@ -765,7 +825,7 @@ age_base_data <- tibble(
 
 # Prepare the label text for the forest plot
 age_labeltext <- rbind(
-  c("Feature", "Negative", "Positive", "OR [95% CI]", "P-Value", "Adj. P-Value"),
+  c("Feature", "Absent", "Present", "OR [95% CI]", "P-Value", "Adj. P-Value"),
   as.matrix(cbind(
     age_base_data$feature_label,
     base_data$group0,
@@ -794,14 +854,15 @@ forestplot(
   lower = lower_all,
   upper = upper_all,
   is.summary = c(TRUE, rep(FALSE, nrow(age_base_data))),
-  boxsize = 0.2,
+  boxsize = 0.3,
   col = fpColors(box = "darkgreen", line = "forestgreen", zero = "red"),
   xlog = TRUE,
   clip = c(min_val, max_val),
   xticks = pretty(c(min_val, max_val)),
+  lineheight = unit(0.6, "cm"), 
   title = "Impact of Age on Vascular Histopathology",
   txt_gp = fpTxtGp(
-    label = gpar(cex = 0.8),
+    label = gpar(cex = 0.8, lineheight = 1),
     ticks = gpar(cex = 0.8),
     xlab  = gpar(cex = 0.9)
   )
@@ -812,324 +873,1550 @@ grid.text("*P-values adjusted with Benjamini-Hochberg (FDR) procedure", x = 0.01
 
 ```
 
-
 ### 3.3 Interpretation of Results
+
 Across all three models (age, sex, and steroid exposure), no histological features reached statistical significance. These results indicate that, within this cohort, these demographic and treatment variables are not associated with variation in histopathological features and may not serve as meaningful covariates in subsequent analyses.
 
 ## 4. Differential Gene Expression
 
-Comparisons Include: True negative controls (GCA = 0) vs. steroid exposure of
+------------------------------------------------------------------------
 
-- less than 3 days (0, 1, 2 days)
-- 3-4 days
-- 5-7 days
-- more than 7 days
+Comparisons Include: True negative controls vs. steroid exposure of
+
+-   less than 3 days (0, 1, 2 days)
+-   3-4 days
+-   5-7 days
+-   more than 7 days
 
 ```{r, echo=FALSE}
-gene_data <-read.table("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_cc_c1_c2_GENCODE.txt")
 
-gene_data <- round(as.matrix(gene_data))  # round to nearest integer
-mode(gene_data) <- "numeric"              # ensure numeric mode
-# need to ask if raw counts? cause why decimal?
-clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
-hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+GCA_samples <-read.table("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_cc_c1_c2_GENCODE.txt")
+GCA_samples[] <- lapply(GCA_samples, as.numeric)
 
-combined <- merge(clin_var, hist_var)
+negatives_raw <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_c1-c4_ensembl_expanded.csv")
+rownames(negatives_raw) <- negatives_raw[[1]]  
+negatives <- negatives_raw[, -1]               
+negatives[] <- lapply(negatives, as.numeric)   
+
+true_negative <- c('12802', '12863', '12923', '14323', '14388', '14783', '18043', '18045', '18047', '18053', '18060', '18068', '18092', '19768', '19780', '19787')
+
+sample_ids <- substr(names(negatives), 2, 6)
+true_negative_samples <- names(negatives)[sample_ids %in% true_negative]
 
 combined <- combined %>%
   mutate(steroid_group = case_when(
     is.na(steroids_days)         ~ NA_character_,
-    GCA_present == 0             ~ "true_negative",
     steroids_days < 3            ~ "less_3",
     steroids_days < 5            ~ "days_3_4",
     steroids_days < 8            ~ "days_5_6_7",
     steroids_days >= 8           ~ "more_7"
   ))
+neg_df <- negatives[true_negative_samples]
 
 ```
 
+### 4.1 \<3 days
 
-### 4.1 Steriod Exposure of Less than 3 days
+------------------------------------------------------------------------
 
-```{r, echo=FALSE, message=FALSE}
+```{r echo=FALSE, message=FALSE}
+### 4.1 <3 days
 
-df <- combined %>%
-  filter(steroid_group %in% c("less_3", "true_negative"))
+less_3 <- combined %>% filter(steroid_group == "less_3")
+less3_ids <- paste0("X", less_3$ID)
+neg_ids <- true_negative_samples
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+less3_expr <- GCA_samples[, less3_ids, drop = FALSE]
+less3_neg_expr <- negatives[, neg_ids, drop = FALSE]
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+rownames(less3_expr) <- gsub("\\..*", "", rownames(less3_expr))
+rownames(less3_neg_expr) <- gsub("\\..*", "", rownames(less3_neg_expr))
 
-coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "less_3"))
+common_genes_less3 <- intersect(rownames(less3_expr), rownames(less3_neg_expr))
+less3_expr <- less3_expr[common_genes_less3, , drop = FALSE]
+less3_neg_expr <- less3_neg_expr[common_genes_less3, , drop = FALSE]
+
+gene_data_less3 <- cbind(less3_expr, less3_neg_expr)
+gene_data_less3[] <- lapply(gene_data_less3, as.numeric)
+gene_data_less3 <- round(gene_data_less3)
+
+coldata_less3 <- data.frame(
+  row.names = c(less3_ids, neg_ids),
+  group = factor(
+    c(rep("less_3", length(less3_ids)),
+      rep("true_negative", length(neg_ids))),
+    levels = c("true_negative", "less_3")
+  )
 )
 
-dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
-  colData = coldata,
-  design = ~ steroid_group
+dds_less3 <- DESeqDataSetFromMatrix(
+  countData = gene_data_less3,
+  colData = coldata_less3,
+  design = ~ group
 )
-dds <- DESeq(dds)
+dds_less3 <- DESeq(dds_less3)
 
-res <- results(dds, contrast = c("steroid_group", "less_3", "true_negative"))
+res_less3 <- results(dds_less3, contrast = c("group", "less_3", "true_negative"))
+res_df_less3 <- as.data.frame(res_less3)
+res_df_less3$gene <- rownames(res_df_less3)
+res_df_less3$ensembl_clean <- gsub("\\..*", "", res_df_less3$gene)
 
-res_df <- as.data.frame(res)
-res_df$gene <- rownames(res_df)
-
-res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
-
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "useast")
+annotations_less3 <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype", 'chromosome_name'),
   filters = "ensembl_gene_id",
-  values = res_df$ensembl_clean,
+  values = res_df_less3$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
-  res_df,
-  annotations,
+res_df_less3 <- merge(
+  res_df_less3,
+  annotations_less3,
   by.x = "ensembl_clean",
   by.y = "ensembl_gene_id",
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
-sig_genes <- sig_genes[order(sig_genes$padj), ]
+sig_genes_less3 <- res_df_less3 %>% filter(!is.na(padj), padj < 0.05)
+sig_genes_less3 <- sig_genes_less3[, c("gene", "hgnc_symbol", "log2FoldChange", "baseMean", 'padj', "description", "gene_biotype", "chromosome_name")]
+sig_genes_less3 <- sig_genes_less3[order(sig_genes_less3$padj), ]
 
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+sig_genes_without_sex_less3 <- sig_genes_less3 %>% filter(!chromosome_name %in% c("X", "Y"))
+sig_genes_with_sex_less3 <- sig_genes_less3 %>% filter(chromosome_name %in% c("X", "Y"))
+top_fc_less3 <- sig_genes_without_sex_less3[order(-abs(sig_genes_without_sex_less3$log2FoldChange)), ]
+protein_coding_less3 <- top_fc_less3 %>% filter(gene_biotype == "protein_coding")
+
+upregulated_strict_less3 <- protein_coding_less3 %>% filter(log2FoldChange > 1)
+downregulated_strict_less3 <- protein_coding_less3 %>% filter(log2FoldChange < -1)
+
 ```
 
-<details><summary><strong>View Results Ordered By Significance </strong></summary>
+#### Result Summary
+
+```{r, echo = FALSE}
+summary_less3 <- data.frame(
+  Step = c(
+    "All DEGs",
+    "Significant DEGs (padj < 0.05)",
+    "Sex-linked (X/Y)",
+    "Autosomal (1–22)",
+    "Protein-coding (autosomal only)",
+    "Upregulated (LFC > 1)",
+    "Downregulated (LFC < -1)"
+  ),
+  Count = c(
+    nrow(res_df_less3),
+    nrow(sig_genes_less3),
+    nrow(sig_genes_with_sex_less3),
+    nrow(sig_genes_without_sex_less3),
+    nrow(protein_coding_less3),
+    nrow(upregulated_strict_less3),
+    nrow(downregulated_strict_less3)
+  ),
+  stringsAsFactors = FALSE
+)
+
+summary_less3 %>%
+  kbl(
+    caption = "Summary of sequential filtering steps for DEGs. Each row represents a subset of the previous category (significance, chromosome type, biotype). Significant protein-coding autosomal DEGs are used for intersection analysis between models."
+  ) %>%
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover"))
+
+```
+
+<details>
+
+<summary><strong>View Results Ordered By Significance </strong></summary>
+
 ```{r, echo=FALSE}
-knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+knitr::kable(sig_genes_less3[1:100, ])
 ```
+
 </details>
 
-<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+<details>
+
+<summary><strong>View Protein Coding Genes Ordered By Log2FoldChange </strong></summary>
+
 ```{r, echo=FALSE}
-knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+knitr::kable(protein_coding_less3[1:100, ])
 ```
+
 </details>
 
-### 4.2 Steriod Exposure Between 3 to 4 Days
+<details>
+
+<summary><strong>View Most Downregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(downregulated_strict_less3[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Upregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(upregulated_strict_less3[1:100, ])
+```
+
+</details>
+
+
+### 4.2 3 to 4 Days
+
+------------------------------------------------------------------------
 
 ```{r, echo=FALSE, message=FALSE}
+days_3_4 <- combined %>% filter(steroid_group == "days_3_4")
+days_3_4_ids <- paste0("X", days_3_4$ID)
 
-df <- combined %>%
-  filter(steroid_group %in% c("days_3_4", "true_negative"))
+valid_days_3_4_ids <- days_3_4_ids[days_3_4_ids %in% names(GCA_samples)]
+neg_ids_days_3_4 <- true_negative_samples
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+expr_days_3_4 <- GCA_samples[, valid_days_3_4_ids, drop = FALSE]
+neg_expr_days_3_4 <- negatives[, neg_ids_days_3_4, drop = FALSE]
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+rownames(expr_days_3_4) <- gsub("\\..*", "", rownames(expr_days_3_4))
+rownames(neg_expr_days_3_4) <- gsub("\\..*", "", rownames(neg_expr_days_3_4))
 
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+common_genes_days_3_4 <- intersect(rownames(expr_days_3_4), rownames(neg_expr_days_3_4))
+expr_days_3_4 <- expr_days_3_4[common_genes_days_3_4, , drop = FALSE]
+neg_expr_days_3_4 <- neg_expr_days_3_4[common_genes_days_3_4, , drop = FALSE]
 
-coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_3_4"))
+gene_data_days_3_4 <- cbind(expr_days_3_4, neg_expr_days_3_4)
+gene_data_days_3_4[] <- lapply(gene_data_days_3_4, as.numeric)
+gene_data_days_3_4 <- round(gene_data_days_3_4)
+
+all_sample_ids_days_3_4 <- colnames(gene_data_days_3_4)
+coldata_days_3_4 <- data.frame(
+  row.names = all_sample_ids_days_3_4,
+  group = factor(
+    ifelse(all_sample_ids_days_3_4 %in% valid_days_3_4_ids, "days_3_4", "true_negative"),
+    levels = c("true_negative", "days_3_4")
+  )
 )
 
-dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
-  colData = coldata,
-  design = ~ steroid_group
+dds_days_3_4 <- DESeqDataSetFromMatrix(
+  countData = gene_data_days_3_4,
+  colData = coldata_days_3_4,
+  design = ~ group
 )
-dds <- DESeq(dds)
+dds_days_3_4 <- DESeq(dds_days_3_4)
 
-res <- results(dds, contrast = c("steroid_group", "days_3_4", "true_negative"))
+res_days_3_4 <- results(dds_days_3_4, contrast = c("group", "days_3_4", "true_negative"))
+res_df_days_3_4 <- as.data.frame(res_days_3_4)
+res_df_days_3_4$gene <- rownames(res_df_days_3_4)
+res_df_days_3_4$ensembl_clean <- gsub("\\..*", "", res_df_days_3_4$gene)
 
-res_df <- as.data.frame(res)
-res_df$gene <- rownames(res_df)
-
-res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
-
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "useast")
+annotations_days_3_4 <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype", 'chromosome_name'),
   filters = "ensembl_gene_id",
-  values = res_df$ensembl_clean,
+  values = res_df_days_3_4$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
-  res_df,
-  annotations,
+res_df_days_3_4 <- merge(
+  res_df_days_3_4,
+  annotations_days_3_4,
   by.x = "ensembl_clean",
   by.y = "ensembl_gene_id",
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
-sig_genes <- sig_genes[order(sig_genes$padj), ]
+sig_genes_days_3_4 <- res_df_days_3_4 %>% filter(!is.na(padj), padj < 0.05)
 
+sig_genes_days_3_4 <- sig_genes_days_3_4[, c("gene", "hgnc_symbol", "log2FoldChange", "baseMean", 'padj', "description", "gene_biotype", "chromosome_name")]
+sig_genes_days_3_4 <- sig_genes_days_3_4[order(sig_genes_days_3_4$padj), ]
+sig_genes_without_sex_days_3_4 <- sig_genes_days_3_4 %>% filter(!chromosome_name %in% c("X", "Y"))
+sig_genes_with_sex_days_3_4 <- sig_genes_days_3_4 %>% filter(chromosome_name %in% c("X", "Y"))
+top_fc_days_3_4  <- sig_genes_without_sex_days_3_4[order(-abs(sig_genes_without_sex_days_3_4$log2FoldChange)), ]
+protein_coding_days_3_4 <- top_fc_days_3_4 %>% filter(gene_biotype == "protein_coding")
 
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+upregulated_strict_days_3_4 <- protein_coding_days_3_4 %>%
+  filter(log2FoldChange > 1)
+
+downregulated_strict_days_3_4 <- protein_coding_days_3_4 %>%
+  filter(log2FoldChange < -1)
+
 ```
 
-<details><summary><strong>View Results Ordered By Significance </strong></summary>
+#### Result Summary
+
+```{r, echo = FALSE}
+summary_days_3_4 <- data.frame(
+  Step = c(
+    "All DEGs",
+    "Significant DEGs (padj < 0.05)",
+    "Sex-linked (X/Y)",
+    "Autosomal (1–22)",
+    "Protein-coding (autosomal only)",
+    "Upregulated (LFC > 1)",
+    "Downregulated (LFC < -1)"
+  ),
+  Count = c(
+    nrow(res_df_days_3_4),
+    nrow(sig_genes_days_3_4),
+    nrow(sig_genes_with_sex_days_3_4),
+    nrow(sig_genes_without_sex_days_3_4),
+    nrow(protein_coding_days_3_4),
+    nrow(upregulated_strict_days_3_4),
+    nrow(downregulated_strict_days_3_4)
+  ),
+  stringsAsFactors = FALSE
+)
+
+summary_days_3_4 %>%
+  kbl(
+    caption = "Summary of sequential filtering steps for DEGs. Each row represents a subset of the previous category (significance, chromosome type, biotype). Significant protein-coding autosomal DEGs are used for intersection analysis between models."
+  ) %>%
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover"))
+
+```
+
+<break>
+
+<details>
+
+<summary><strong>View Results Ordered By Significance </strong></summary>
+
 ```{r, echo=FALSE}
-knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+knitr::kable(sig_genes_days_3_4[1:100, ])
 ```
+
 </details>
 
-<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+<details>
+
+<summary><strong>View Protein Coding Genes Ordered By Log2FoldChange </strong></summary>
+
 ```{r, echo=FALSE}
-knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+knitr::kable(protein_coding_days_3_4[1:100, ])
 ```
+
 </details>
 
-### 4.3 Steriod Exposure Between 5 to 7 Days
+<details>
+
+<summary><strong>View Most Downregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(downregulated_strict_days_3_4[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Upregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(upregulated_strict_days_3_4[1:100, ])
+```
+
+</details>
+
+
+### 4.3 5 to 7 Days
+
+------------------------------------------------------------------------
 
 ```{r, echo=FALSE, message=FALSE}
+days_5_6_7 <- combined %>% filter(steroid_group == "days_5_6_7")
+days_5_6_7_ids <- paste0("X", days_5_6_7$ID)
+valid_days_5_6_7_ids <- days_5_6_7_ids[days_5_6_7_ids %in% names(GCA_samples)]
+neg_ids_days_5_6_7 <- true_negative_samples
 
-df <- combined %>%
-  filter(steroid_group %in% c("days_5_6_7", "true_negative"))
+expr_days_5_6_7 <- GCA_samples[, valid_days_5_6_7_ids, drop = FALSE]
+neg_expr_days_5_6_7 <- negatives[, neg_ids_days_5_6_7, drop = FALSE]
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+rownames(expr_days_5_6_7) <- gsub("\\..*", "", rownames(expr_days_5_6_7))
+rownames(neg_expr_days_5_6_7) <- gsub("\\..*", "", rownames(neg_expr_days_5_6_7))
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+common_genes_days_5_6_7 <- intersect(rownames(expr_days_5_6_7), rownames(neg_expr_days_5_6_7))
+expr_days_5_6_7 <- expr_days_5_6_7[common_genes_days_5_6_7, , drop = FALSE]
+neg_expr_days_5_6_7 <- neg_expr_days_5_6_7[common_genes_days_5_6_7, , drop = FALSE]
 
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+gene_data_days_5_6_7 <- cbind(expr_days_5_6_7, neg_expr_days_5_6_7)
+gene_data_days_5_6_7[] <- lapply(gene_data_days_5_6_7, as.numeric)
+gene_data_days_5_6_7 <- round(gene_data_days_5_6_7)
 
-coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_5_6_7"))
+all_sample_ids_days_5_6_7 <- colnames(gene_data_days_5_6_7)
+coldata_days_5_6_7 <- data.frame(
+  row.names = all_sample_ids_days_5_6_7,
+  group = factor(
+    ifelse(all_sample_ids_days_5_6_7 %in% valid_days_5_6_7_ids, "days_5_6_7", "true_negative"),
+    levels = c("true_negative", "days_5_6_7")
+  )
 )
 
-dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
-  colData = coldata,
-  design = ~ steroid_group
+dds_days_5_6_7 <- DESeqDataSetFromMatrix(
+  countData = gene_data_days_5_6_7,
+  colData = coldata_days_5_6_7,
+  design = ~ group
 )
-dds <- DESeq(dds)
+dds_days_5_6_7 <- DESeq(dds_days_5_6_7)
 
-res <- results(dds, contrast = c("steroid_group", "days_5_6_7", "true_negative"))
+res_days_5_6_7 <- results(dds_days_5_6_7, contrast = c("group", "days_5_6_7", "true_negative"))
+res_df_days_5_6_7 <- as.data.frame(res_days_5_6_7)
+res_df_days_5_6_7$gene <- rownames(res_df_days_5_6_7)
+res_df_days_5_6_7$ensembl_clean <- gsub("\\..*", "", res_df_days_5_6_7$gene)
 
-res_df <- as.data.frame(res)
-res_df$gene <- rownames(res_df)
-
-res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
-
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "useast")
+annotations_days_5_6_7 <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype", "chromosome_name"),
   filters = "ensembl_gene_id",
-  values = res_df$ensembl_clean,
+  values = res_df_days_5_6_7$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
-  res_df,
-  annotations,
+res_df_days_5_6_7 <- merge(
+  res_df_days_5_6_7,
+  annotations_days_5_6_7,
   by.x = "ensembl_clean",
   by.y = "ensembl_gene_id",
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
-sig_genes <- sig_genes[order(sig_genes$padj), ]
+sig_genes_days_5_6_7 <- res_df_days_5_6_7 %>% filter(!is.na(padj), padj < 0.05)
 
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+sig_genes_days_5_6_7 <- sig_genes_days_5_6_7[, c("gene", "hgnc_symbol", "log2FoldChange", "baseMean", "padj", "description", "gene_biotype", "chromosome_name")]
+sig_genes_days_5_6_7 <- sig_genes_days_5_6_7[order(sig_genes_days_5_6_7$padj), ]
+sig_genes_without_sex_days_5_6_7 <- sig_genes_days_5_6_7 %>% filter(!chromosome_name %in% c("X", "Y"))
+sig_genes_with_sex_days_5_6_7 <- sig_genes_days_5_6_7 %>% filter(chromosome_name %in% c("X", "Y"))
+top_fc_days_5_6_7  <- sig_genes_without_sex_days_5_6_7[order(-abs(sig_genes_without_sex_days_5_6_7$log2FoldChange)), ]
+protein_coding_days_5_6_7 <- top_fc_days_5_6_7 %>% filter(gene_biotype == "protein_coding")
+
+upregulated_strict_days_5_6_7 <- protein_coding_days_5_6_7 %>%
+  filter(log2FoldChange > 1)
+
+downregulated_strict_days_5_6_7 <- protein_coding_days_5_6_7 %>%
+  filter(log2FoldChange < -1)
+
 ```
 
-<details><summary><strong>View Results Ordered By Significance </strong></summary>
-```{r, echo=FALSE}
-knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
-```
-</details>
+#### Result Summary
 
-<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
-```{r, echo=FALSE}
-knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
-```
-</details>
-
-### 4.4 Steriod Exposure of More than 7 Days
-
-```{r, echo=FALSE, message=FALSE}
-
-df <- combined %>%
-  filter(steroid_group %in% c("more_7", "true_negative"))
-
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
-
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
-
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
-
-coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "more_7"))
+```{r, echo = FALSE}
+summary_days_5_6_7 <- data.frame(
+  Step = c(
+    "All DEGs",
+    "Significant DEGs (padj < 0.05)",
+    "Sex-linked (X/Y)",
+    "Autosomal (1–22)",
+    "Protein-coding (autosomal only)",
+    "Upregulated (LFC > 1)",
+    "Downregulated (LFC < -1)"
+  ),
+  Count = c(
+    nrow(res_days_5_6_7),
+    nrow(sig_genes_days_5_6_7),
+    nrow(sig_genes_with_sex_days_5_6_7),
+    nrow(sig_genes_without_sex_days_5_6_7),
+    nrow(protein_coding_days_5_6_7),
+    nrow(upregulated_strict_days_5_6_7),
+    nrow(downregulated_strict_days_5_6_7)
+  ),
+  stringsAsFactors = FALSE
 )
 
-dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
-  colData = coldata,
-  design = ~ steroid_group
+summary_days_5_6_7 %>%
+  kbl(
+    caption = "Summary of sequential filtering steps for DEGs. Each row represents a subset of the previous category (significance, chromosome type, biotype). Significant protein-coding autosomal DEGs are used for intersection analysis between models."
+  ) %>%
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover"))
+
+```
+
+<break>
+
+<details>
+
+<summary><strong>View Results Ordered By Significance </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(sig_genes_days_5_6_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Protein Coding Genes Ordered By Log2FoldChange </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(protein_coding_days_5_6_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Downregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(downregulated_strict_days_5_6_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Upregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(upregulated_strict_days_5_6_7[1:100, ])
+```
+
+</details>
+
+
+### 4.4 More than 7 Days
+
+------------------------------------------------------------------------
+
+```{r, echo = FALSE, message = FALSE}
+more_7 <- combined %>% filter(steroid_group == "more_7")
+more_7_ids <- paste0("X", more_7$ID)
+valid_more_7_ids <- more_7_ids[more_7_ids %in% names(GCA_samples)]
+neg_ids_more_7 <- true_negative_samples
+
+expr_more_7 <- GCA_samples[, valid_more_7_ids, drop = FALSE]
+neg_expr_more_7 <- negatives[, neg_ids_more_7, drop = FALSE]
+
+rownames(expr_more_7) <- gsub("\\..*", "", rownames(expr_more_7))
+rownames(neg_expr_more_7) <- gsub("\\..*", "", rownames(neg_expr_more_7))
+
+common_genes_more_7 <- intersect(rownames(expr_more_7), rownames(neg_expr_more_7))
+expr_more_7 <- expr_more_7[common_genes_more_7, , drop = FALSE]
+neg_expr_more_7 <- neg_expr_more_7[common_genes_more_7, , drop = FALSE]
+
+gene_data_more_7 <- cbind(expr_more_7, neg_expr_more_7)
+gene_data_more_7[] <- lapply(gene_data_more_7, as.numeric)
+gene_data_more_7 <- round(gene_data_more_7)
+
+all_sample_ids_more_7 <- colnames(gene_data_more_7)
+coldata_more_7 <- data.frame(
+  row.names = all_sample_ids_more_7,
+  group = factor(
+    ifelse(all_sample_ids_more_7 %in% valid_more_7_ids, "more_7", "true_negative"),
+    levels = c("true_negative", "more_7")
+  )
 )
-dds <- DESeq(dds)
 
-res <- results(dds, contrast = c("steroid_group", "more_7", "true_negative"))
+dds_more_7 <- DESeqDataSetFromMatrix(
+  countData = gene_data_more_7,
+  colData = coldata_more_7,
+  design = ~ group
+)
+dds_more_7 <- DESeq(dds_more_7)
 
-res_df <- as.data.frame(res)
-res_df$gene <- rownames(res_df)
+res_more_7 <- results(dds_more_7, contrast = c("group", "more_7", "true_negative"))
+res_df_more_7 <- as.data.frame(res_more_7)
+res_df_more_7$gene <- rownames(res_df_more_7)
+res_df_more_7$ensembl_clean <- gsub("\\..*", "", res_df_more_7$gene)
 
-res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
-
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "useast")
+annotations_more_7 <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype", "chromosome_name"),
   filters = "ensembl_gene_id",
-  values = res_df$ensembl_clean,
+  values = res_df_more_7$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
-  res_df,
-  annotations,
+res_df_more_7 <- merge(
+  res_df_more_7,
+  annotations_more_7,
   by.x = "ensembl_clean",
   by.y = "ensembl_gene_id",
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
-sig_genes <- sig_genes[order(sig_genes$padj), ]
+sig_genes_more_7 <- res_df_more_7 %>% filter(!is.na(padj), padj < 0.05)
 
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+sig_genes_more_7 <- sig_genes_more_7[, c("gene", "hgnc_symbol", "log2FoldChange", "baseMean", "padj", "description", "gene_biotype", "chromosome_name")]
+sig_genes_more_7 <- sig_genes_more_7[order(sig_genes_more_7$padj), ]
+sig_genes_without_sex_more_7 <- sig_genes_more_7 %>% filter(!chromosome_name %in% c("X", "Y"))
+sig_genes_with_sex_more_7 <- sig_genes_more_7 %>% filter(chromosome_name %in% c("X", "Y"))
+top_fc_more_7 <- sig_genes_without_sex_more_7[order(-abs(sig_genes_without_sex_more_7$log2FoldChange)), ]
+protein_coding_more_7 <- top_fc_more_7 %>% filter(gene_biotype == "protein_coding")
+
+upregulated_strict_more_7 <- protein_coding_more_7 %>%
+  filter(log2FoldChange > 1)
+
+downregulated_strict_more_7 <- protein_coding_more_7 %>%
+  filter(log2FoldChange < -1)
+
 ```
 
-<details><summary><strong>View Results Ordered By Significance </strong></summary>
+#### Result Summary
+
+```{r, echo = FALSE}
+summary_more_7 <- data.frame(
+  Step = c(
+    "All DEGs",
+    "Significant DEGs (padj < 0.05)",
+    "Sex-linked (X/Y)",
+    "Autosomal (1–22)",
+    "Protein-coding (autosomal only)",
+    "Upregulated (LFC > 1)",
+    "Downregulated (LFC < -1)"
+  ),
+  Count = c(
+    nrow(res_df_more_7),
+    nrow(sig_genes_more_7),
+    nrow(sig_genes_with_sex_more_7),
+    nrow(sig_genes_without_sex_more_7),
+    nrow(protein_coding_more_7),
+    nrow(upregulated_strict_more_7),
+    nrow(downregulated_strict_more_7)
+  ),
+  stringsAsFactors = FALSE
+)
+
+summary_more_7 %>%
+  kbl(
+    caption = "Summary of sequential filtering steps for DEGs. Each row represents a subset of the previous category (significance, chromosome type, biotype). Significant protein-coding autosomal DEGs are used for intersection analysis between models."
+  ) %>%
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover"))
+
+```
+
+<break>
+
+<details>
+
+<summary><strong>View Results Ordered By Significance </strong></summary>
+
 ```{r, echo=FALSE}
-knitr::kable(sig_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+knitr::kable(sig_genes_more_7[1:100, ])
 ```
+
 </details>
 
-<details><summary><strong>View Results Ordered By Log2FoldChange </strong></summary>
+<details>
+
+<summary><strong>View Protein Coding Genes Ordered By Log2FoldChange </strong></summary>
+
 ```{r, echo=FALSE}
-knitr::kable(foldchange_genes[, c('gene', 'hgnc_symbol', 'log2FoldChange', 'padj' )], caption = "Steroid Exposure Less than 3 Day ")
+knitr::kable(protein_coding_more_7[1:100, ])
 ```
+
 </details>
+
+<details>
+
+<summary><strong>View Most Downregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(downregulated_strict_more_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Upregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(upregulated_strict_more_7[1:100, ])
+```
+
+</details>
+
+
+### 4.5 Analysing Overlapping Genes
+
+------------------------------------------------------------------------
+
+A gene is included if it meets the following:
+
+-   Adjusted p-value (**padj**) \< 0.05\
+-   Absolute log₂ fold change (**\|log₂FC\|**) \> 1
+-   Autosomal
+-   Protein coding
+
+
+<break>
+
+#### 4.5.1 Venn Diagrams: Overlap of DEGs
+
+------------------------------------------------------------------------
+
+Visualisation of overlapping differentially expressed genes (DEGs) across steroid exposure timepoints.
+
+<break>
+
+```{r, echo = FALSE, message = FALSE}
+
+all_gene_list <- list(
+  `<3 Days Up`   = unique(na.omit(upregulated_strict_less3$hgnc_symbol)),
+  `3–4 Days Up`  = unique(na.omit(upregulated_strict_days_3_4$hgnc_symbol)),
+  `5–7 Days Up`  = unique(na.omit(upregulated_strict_days_5_6_7$hgnc_symbol)),
+  `>7 Days Up`   = unique(na.omit(upregulated_strict_more_7$hgnc_symbol)),
+  `<3 Days Down`   = unique(na.omit(downregulated_strict_less3$hgnc_symbol)),
+  `3–4 Days Down`  = unique(na.omit(downregulated_strict_days_3_4$hgnc_symbol)),
+  `5–7 Days Down`  = unique(na.omit(downregulated_strict_days_5_6_7$hgnc_symbol)),
+  `>7 Days Down`   = unique(na.omit(downregulated_strict_more_7$hgnc_symbol))
+)
+up_genes_list <- list(
+  `<3 Days`   = unique(na.omit(upregulated_strict_less3$hgnc_symbol)),
+  `3–4 Days`  = unique(na.omit(upregulated_strict_days_3_4$hgnc_symbol)),
+  `5–7 Days`  = unique(na.omit(upregulated_strict_days_5_6_7$hgnc_symbol)),
+  `>7 Days`   = unique(na.omit(upregulated_strict_more_7$hgnc_symbol))
+)
+
+down_genes_list <- list(
+  `<3 Days`   = unique(na.omit(downregulated_strict_less3$hgnc_symbol)),
+  `3–4 Days`  = unique(na.omit(downregulated_strict_days_3_4$hgnc_symbol)),
+  `5–7 Days`  = unique(na.omit(downregulated_strict_days_5_6_7$hgnc_symbol)),
+  `>7 Days`   = unique(na.omit(downregulated_strict_more_7$hgnc_symbol))
+)
+```
+
+```{r, echo = FALSE, message = FALSE}
+
+ggVennDiagram(up_genes_list, label_alpha = 0, edge_size = 0.5) +
+  scale_fill_gradient(low = "white", high = "#045275")
+
+col_before <- "#045275"  
+col_matrix <- "#045275"    
+col_sets   <- "#045275"  
+
+upset(
+  fromList(up_genes_list),
+  main.bar.color   = col_before,    
+  sets.bar.color   = col_sets,   
+  shade.color      = col_before,    
+  matrix.color     = col_matrix,  
+  point.size       = 3.8,
+  line.size        = 1.2,
+  order.by         = "freq",
+  nintersects      = 20,          
+  text.scale       = c(1.6, 1.3, 1.3, 1.3, 1.4, 1.6),
+  sets.x.label     = "Set Size",
+  mainbar.y.label  = "Intersection Size"
+)
+
+ggVennDiagram(down_genes_list, label_alpha = 0, edge_size = 0.5) +
+  scale_fill_gradient(low = "white", high = "#045275")
+
+upset(
+  fromList(down_genes_list),
+  main.bar.color = "#045275",
+  sets.bar.color = "#045275",        
+  shade.color = "#045275",
+  matrix.color = "black",           
+  point.size = 3.5,                
+  line.size = 1.2,  
+  order.by = "freq",
+  text.scale = c(1.5, 1.2, 1.2, 1.2, 1.3, 1.5)  
+)
+
+
+
+
+```
+
+
+#### 4.5.2 Presence of DEGs Across Timepoints
+
+------------------------------------------------------------------------
+
+```{r, echo = FALSE}
+# Function to create summary tables
+create_deg_presence_table <- function(gene_lists, label = "Upregulated") {
+  all_genes <- unique(unlist(gene_lists))
+  presence_mat <- sapply(gene_lists, function(set) all_genes %in% set)
+  
+  presence_df <- data.frame(Gene = all_genes, presence_mat)
+  
+  # Optional: Total count of presence
+  presence_df$Total <- rowSums(presence_mat)
+  
+  # Sort by how many timepoints gene is present in
+  presence_df <- presence_df[order(-presence_df$Total), ]
+  
+  # Replace TRUE/FALSE with 
+  presence_df[, -c(1, ncol(presence_df))] <- lapply(
+    presence_df[, -c(1, ncol(presence_df))],
+    function(x) ifelse(x, "TRUE", "FALSE")
+  )
+  
+  # Optional: Rename columns for display
+  colnames(presence_df) <- c(
+    "Gene", names(gene_lists), "Total Timepoints"
+  )
+  
+  return(presence_df)
+}
+
+# ---- Upregulated ----
+up_list <- list(
+  "<3 Days"   = upregulated_strict_less3$hgnc_symbol,
+  "3–4 Days"  = upregulated_strict_days_3_4$hgnc_symbol,
+  "5–7 Days"  = upregulated_strict_days_5_6_7$hgnc_symbol,
+  ">7 Days"   = upregulated_strict_more_7$hgnc_symbol
+)
+
+up_table <- create_deg_presence_table(up_list, "Upregulated")
+
+# ---- Downregulated ----
+down_list <- list(
+  "<3 Days"   = downregulated_strict_less3$hgnc_symbol,
+  "3–4 Days"  = downregulated_strict_days_3_4$hgnc_symbol,
+  "5–7 Days"  = downregulated_strict_days_5_6_7$hgnc_symbol,
+  ">7 Days"   = downregulated_strict_more_7$hgnc_symbol
+)
+
+down_table <- create_deg_presence_table(down_list, "Downregulated")
+
+# Count how many genes are shared across how many timepoints
+up_summary_counts <- as.data.frame(table(up_table$`Total Timepoints`), na.rm= TRUE)
+colnames(up_summary_counts) <- c("Timepoints Present", "Number of Upregulated Genes")
+
+down_summary_counts <- as.data.frame(table(down_table$`Total Timepoints`))
+colnames(down_summary_counts) <- c("Timepoints Present", "Number of Downregulated Genes")
+
+```
+
+```{r, echo = FALSE}
+kbl(up_summary_counts, caption = "Upregulated DEG Count by Number of Timepoints") %>%
+  kable_styling(full_width = TRUE )
+
+kbl(down_summary_counts, caption = "Downregulated DEG Count by Number of Timepoints") %>%
+  kable_styling(full_width = TRUE)
+```
+
+<details>
+
+<summary><strong>Presence of Upregulated DEGs Across Timepoints </strong></summary>
+
+```{r, echo=FALSE}
+kbl(up_table, caption = "Presence of Upregulated DEGs Across Timepoints") %>%
+  kable_styling(full_width = TRUE)
+```
+
+</details>
+
+<details>
+
+<summary><strong>Presence of Downregulated DEGs Across Timepoints </strong></summary>
+
+```{r, echo = FALSE}
+kbl(down_table, caption = "Presence of Downregulated DEGs Across Timepoints") %>%
+  kable_styling(full_width = TRUE)
+
+```
+
+</details>
+
+<break>
+
+#### 4.5.3 Expression Direction Changes
+
+------------------------------------------------------------------------
+
+```{r, echo = FALSE}
+# Combine upregulated and downregulated gene symbols
+all_upregulated <- unique(c(
+  upregulated_strict_less3$gene,
+  upregulated_strict_days_3_4$gene,
+  upregulated_strict_days_5_6_7$gene,
+  upregulated_strict_more_7$gene
+))
+
+all_downregulated <- unique(c(
+  downregulated_strict_less3$gene,
+  downregulated_strict_days_3_4$gene,
+  downregulated_strict_days_5_6_7$gene,
+  downregulated_strict_more_7$gene
+))
+
+# Clean
+all_upregulated <- all_upregulated[!is.na(all_upregulated) & all_upregulated != ""]
+all_downregulated <- all_downregulated[!is.na(all_downregulated) & all_downregulated != ""]
+
+flip_genes <- intersect(all_upregulated, all_downregulated)
+
+# Output
+if (length(flip_genes) == 0) {
+  cat("*No DEG were found to change expression direction across timepoints.**")
+} else {
+  cat("⚠️ **Genes with expression direction changes across timepoints:**\n")
+  knitr::kable(as.data.frame(flip_genes), col.names = "Gene Symbol")
+}
+
+```
+
+#### 4.5.4 Log Fold Change Plots
+
+------------------------------------------------------------------------
+
+To compare the magnitude and consistency of gene expression changes (log₂ fold changes) in shared upregulated genes across adjacent timepoints of steroid exposure in GCA.
+
+By comparing sequential pairs:
+
+-   1–2 vs 3–4 days: captures the immediate to early response.
+-   3–4 vs 5–7 days: shows how the response stabilizes or shifts mid-phase.
+-   5–7 vs \>7 days: reflects any late-phase or rebound/return-to-baseline effects.
+
+This helps identify transition points where the steroid response changes biologically — even if direction (upregulation) remains the same.
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+up_list <- list(
+  "1-2" = upregulated_strict_less3$hgnc_symbol,
+  "3-4" = upregulated_strict_days_3_4$hgnc_symbol,
+  "5-7" = upregulated_strict_days_5_6_7$hgnc_symbol,
+  ">7"  = upregulated_strict_more_7$hgnc_symbol
+)
+
+shared_up_genes <- Reduce(intersect, up_list)
+
+up_df <- data.frame(
+  gene = shared_up_genes,
+  log2FC_1_2  = protein_coding_less3$log2FoldChange[match(shared_up_genes, protein_coding_less3$hgnc_symbol)],
+  log2FC_3_4  = protein_coding_days_3_4$log2FoldChange[match(shared_up_genes, protein_coding_days_3_4$hgnc_symbol)],
+  log2FC_5_7  = protein_coding_days_5_6_7$log2FoldChange[match(shared_up_genes, protein_coding_days_5_6_7$hgnc_symbol)],
+  log2FC_gt7  = protein_coding_more_7$log2FoldChange[match(shared_up_genes, protein_coding_more_7$hgnc_symbol)]
+)
+
+down_list <- list(
+  "1-2" = downregulated_strict_less3$hgnc_symbol,
+  "3-4" = downregulated_strict_days_3_4$hgnc_symbol,
+  "5-7" = downregulated_strict_days_5_6_7$hgnc_symbol,
+  ">7"  = downregulated_strict_more_7$hgnc_symbol
+)
+
+shared_down_genes <- Reduce(intersect, down_list)
+
+down_df <- data.frame(
+  gene = shared_down_genes,
+  log2FC_1_2  = protein_coding_less3$log2FoldChange[match(shared_down_genes, protein_coding_less3$hgnc_symbol)],
+  log2FC_3_4  = protein_coding_days_3_4$log2FoldChange[match(shared_down_genes, protein_coding_days_3_4$hgnc_symbol)],
+  log2FC_5_7  = protein_coding_days_5_6_7$log2FoldChange[match(shared_down_genes, protein_coding_days_5_6_7$hgnc_symbol)],
+  log2FC_gt7  = protein_coding_more_7$log2FoldChange[match(shared_down_genes, protein_coding_more_7$hgnc_symbol)]
+)
+
+plot_fc_comparison <- function(df, xcol, ycol, label_x, label_y, title_text) {
+  ggplot(df, aes_string(x = xcol, y = ycol)) +
+    geom_point(alpha = 0.6, color = "steelblue4") +
+    geom_abline(linetype = "dashed", color = "black") +
+    coord_fixed() +
+    labs(
+      title = title_text,
+      x = label_x,
+      y = label_y
+    ) +
+    theme_classic(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10)
+    )
+}
+
+plot_fc_comparison(up_df, "log2FC_1_2", "log2FC_3_4",
+                   "Log2 Fold Change (1–2 Days)", "Log2 Fold Change (3–4 Days)",
+                   "Upregulated: 1–2 vs 3–4 Days")
+
+plot_fc_comparison(up_df, "log2FC_3_4", "log2FC_5_7",
+                   "Log2 Fold Change (3–4 Days)", "Log2 Fold Change (5–7 Days)",
+                   "Upregulated: 3–4 vs 5–7 Days")
+
+plot_fc_comparison(up_df, "log2FC_5_7", "log2FC_gt7",
+                   "Log2 Fold Change (5–7 Days)", "Log2 Fold Change (>7 Days)",
+                   "Upregulated: 5–7 vs >7 Days")
+
+plot_fc_comparison(down_df, "log2FC_1_2", "log2FC_3_4",
+                   "Log2 Fold Change (1–2 Days)", "Log2 Fold Change (3–4 Days)",
+                   "Downregulated: 1–2 vs 3–4 Days")
+
+plot_fc_comparison(down_df, "log2FC_3_4", "log2FC_5_7",
+                   "Log2 Fold Change (3–4 Days)", "Log2 Fold Change (5–7 Days)",
+                   "Downregulated: 3–4 vs 5–7 Days")
+
+plot_fc_comparison(down_df, "log2FC_5_7", "log2FC_gt7",
+                   "Log2 Fold Change (5–7 Days)", "Log2 Fold Change (>7 Days)",
+                   "Downregulated: 5–7 vs >7 Days")
+
+```
+
+#### 4.5.5 Analysis Re-run
+
+
+```{r, echo = FALSE}
+combined <- combined %>%
+  mutate(steroid_group_re_run = case_when(
+    is.na(steroids_days)         ~ NA_character_,
+    steroids_days < 3            ~ "less_3",
+    steroids_days < 8            ~ "days_3_7",
+    steroids_days >= 8           ~ "more_7"
+  ))
+```
+
+
+```{r, echo = FALSE, message = FALSE}
+days_3_7 <- combined %>% filter(steroid_group_re_run == "days_3_7")
+days_3_7_ids <- paste0("X", days_3_7$ID)
+valid_days_3_7_ids <- days_3_7_ids[days_3_7_ids %in% names(GCA_samples)]
+neg_ids_days_3_7 <- true_negative_samples
+
+expr_days_3_7 <- GCA_samples[, valid_days_3_7_ids, drop = FALSE]
+neg_expr_days_3_7 <- negatives[, neg_ids_days_3_7, drop = FALSE]
+
+rownames(expr_days_3_7) <- gsub("\\..*", "", rownames(expr_days_3_7))
+rownames(neg_expr_days_3_7) <- gsub("\\..*", "", rownames(neg_expr_days_3_7))
+
+common_genes_days_3_7 <- intersect(rownames(expr_days_3_7), rownames(neg_expr_days_3_7))
+expr_days_3_7 <- expr_days_3_7[common_genes_days_3_7, , drop = FALSE]
+neg_expr_days_3_7 <- neg_expr_days_3_7[common_genes_days_3_7, , drop = FALSE]
+
+gene_data_days_3_7 <- cbind(expr_days_3_7, neg_expr_days_3_7)
+gene_data_days_3_7[] <- lapply(gene_data_days_3_7, as.numeric)
+gene_data_days_3_7 <- round(gene_data_days_3_7)
+
+all_sample_ids_days_3_7 <- colnames(gene_data_days_3_7)
+coldata_days_3_7 <- data.frame(
+  row.names = all_sample_ids_days_3_7,
+  group = factor(
+    ifelse(all_sample_ids_days_3_7 %in% valid_days_3_7_ids, "days_3_7", "true_negative"),
+    levels = c("true_negative", "days_3_7")
+  )
+)
+
+dds_days_3_7 <- DESeqDataSetFromMatrix(
+  countData = gene_data_days_3_7,
+  colData = coldata_days_3_7,
+  design = ~ group
+)
+dds_days_3_7 <- DESeq(dds_days_3_7)
+
+res_days_3_7 <- results(dds_days_3_7, contrast = c("group", "days_3_7", "true_negative"))
+res_df_days_3_7<- as.data.frame(res_days_3_7)
+res_df_days_3_7$gene <- rownames(res_df_days_3_7)
+res_df_days_3_7$ensembl_clean <- gsub("\\..*", "", res_df_days_3_7$gene)
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "useast")
+annotations_days_3_7 <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype", "chromosome_name"),
+  filters = "ensembl_gene_id",
+  values = res_df_days_3_7$ensembl_clean,
+  mart = ensembl
+)
+
+res_df_days_3_7 <- merge(
+  res_df_days_3_7,
+  annotations_days_3_7,
+  by.x = "ensembl_clean",
+  by.y = "ensembl_gene_id",
+  all.x = TRUE
+)
+
+sig_genes_days_3_7 <- res_df_days_3_7 %>% filter(!is.na(padj), padj < 0.05)
+
+sig_genes_days_3_7 <- sig_genes_days_3_7[, c("gene", "hgnc_symbol", "log2FoldChange", "baseMean", "padj", "description", "gene_biotype", "chromosome_name")]
+sig_genes_days_3_7<- sig_genes_days_3_7[order(sig_genes_days_3_7$padj), ]
+sig_genes_without_sex_days_3_7 <- sig_genes_days_3_7 %>% filter(!chromosome_name %in% c("X", "Y"))
+sig_genes_with_sex_days_3_7 <- sig_genes_days_3_7 %>% filter(chromosome_name %in% c("X", "Y"))
+top_fc_days_3_7 <- sig_genes_without_sex_days_3_7[order(-abs(sig_genes_without_sex_days_3_7$log2FoldChange)), ]
+protein_coding_days_3_7 <- top_fc_days_3_7 %>% filter(gene_biotype == "protein_coding")
+
+upregulated_strict_days_3_7 <- protein_coding_days_3_7 %>%
+  filter(log2FoldChange > 1)
+
+downregulated_strict_days_3_7 <- protein_coding_days_3_7 %>%
+  filter(log2FoldChange < -1)
+
+```
+
+#### Result Summary
+
+```{r, echo = FALSE}
+summary_days_3_7 <- data.frame(
+  Step = c(
+    "All DEGs",
+    "Significant DEGs (padj < 0.05)",
+    "Sex-linked (X/Y)",
+    "Autosomal (1–22)",
+    "Protein-coding (autosomal only)",
+    "Upregulated (LFC > 1)",
+    "Downregulated (LFC < -1)"
+  ),
+  Count = c(
+    nrow(res_df_days_3_7),
+    nrow(sig_genes_days_3_7),
+    nrow(sig_genes_with_sex_days_3_7),
+    nrow(sig_genes_without_sex_days_3_7),
+    nrow(protein_coding_days_3_7),
+    nrow(upregulated_strict_days_3_7),
+    nrow(downregulated_strict_days_3_7)
+  ),
+  stringsAsFactors = FALSE
+)
+
+summary_days_3_7 %>%
+  kbl(
+    caption = "Summary of sequential filtering steps for DEGs. Each row represents a subset of the previous category (significance, chromosome type, biotype). Significant protein-coding autosomal DEGs are used for intersection analysis between models."
+  ) %>%
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover"))
+
+```
+
+<break>
+
+<details>
+
+<summary><strong>View Results Ordered By Significance </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(sig_genes_days_3_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Protein Coding Genes Ordered By Log2FoldChange </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(protein_coding_days_3_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Downregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(downregulated_strict_days_3_7[1:100, ])
+```
+
+</details>
+
+<details>
+
+<summary><strong>View Most Upregulated Genes </strong></summary>
+
+```{r, echo=FALSE}
+knitr::kable(upregulated_strict_days_3_7[1:100, ])
+```
+
+</details>
+
+
+```{r, echo = FALSE, message = FALSE}
+
+up_genes_list <- list(
+  `<3 Days`   = upregulated_strict_less3$hgnc_symbol,
+  `3–7 Days`  = upregulated_strict_days_3_7$hgnc_symbol,
+  `>7 Days`   = upregulated_strict_more_7$hgnc_symbol
+)
+
+ggVennDiagram(up_genes_list, label_alpha = 0, edge_size = 0.5) +
+  scale_fill_gradient(low = "white", high = "steelblue")
+
+upset(
+  fromList(up_genes_list),
+  main.bar.color = "steelblue",
+  sets.bar.color = "grey30",
+  shade.color = "steelblue",
+  matrix.color = "black",
+  point.size = 3.5,
+  line.size = 1.2,
+  order.by = "freq",
+  text.scale = c(1.5, 1.2, 1.2, 1.2, 1.3, 1.5)
+)
+down_genes_list <- list(
+  `<3 Days`   = downregulated_strict_less3$hgnc_symbol,
+  `3–7 Days`  = downregulated_strict_days_3_7$hgnc_symbol,
+  `>7 Days`   = downregulated_strict_more_7$hgnc_symbol
+)
+
+ggVennDiagram(down_genes_list, label_alpha = 0, edge_size = 0.5) +
+  scale_fill_gradient(low = "white", high = "steelblue")
+
+upset(
+  fromList(down_genes_list),
+  main.bar.color = "steelblue",
+  sets.bar.color = "grey30",
+  shade.color = "steelblue4",
+  matrix.color = "black",
+  point.size = 3.5,
+  line.size = 1.2,
+  order.by = "freq",
+  text.scale = c(1.5, 1.2, 1.2, 1.2, 1.3, 1.5)
+)
+```
+
+
+
+## 5. Pathway Analysis
+
+
+-----------------
+
+### GO Enrichment
+
+-----------------
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+# Upregulated gene lists
+genes_lt3_up <- upregulated_strict_less3$hgnc_symbol
+genes_3_7_up <- upregulated_strict_days_3_7$hgnc_symbol
+genes_gt7_up <- upregulated_strict_more_7$hgnc_symbol
+
+common_up <- Reduce(intersect, list(genes_lt3_up, genes_3_7_up, genes_gt7_up))
+
+unique_lt3_up  <- setdiff(genes_lt3_up, union(genes_3_7_up, genes_gt7_up))
+unique_3_7_up  <- setdiff(genes_3_7_up, union(genes_lt3_up, genes_gt7_up))
+unique_gt7_up  <- setdiff(genes_gt7_up, union(genes_lt3_up, genes_3_7_up))
+
+lt3_3_7_up <- intersect(genes_lt3_up, genes_3_7_up)
+only_lt3_3_7_up <- setdiff(lt3_3_7_up, genes_gt7_up)
+
+lt3_gt7_up <- intersect(genes_lt3_up, genes_gt7_up)
+only_lt3_gt7_up <- setdiff(lt3_gt7_up, genes_3_7_up)
+
+gt7_3_7_up <- intersect(genes_gt7_up, genes_3_7_up)
+only_3_7_gt7_up <- setdiff(gt7_3_7_up, genes_lt3_up)
+
+# Downregulated gene lists
+genes_lt3_down <- downregulated_strict_less3$hgnc_symbol
+genes_3_7_down <- downregulated_strict_days_3_7$hgnc_symbol
+genes_gt7_down <- downregulated_strict_more_7$hgnc_symbol
+
+# Intersections and unique sets
+common_down <- Reduce(intersect, list(genes_lt3_down, genes_3_7_down, genes_gt7_down))
+
+unique_lt3_down  <- setdiff(genes_lt3_down, union(genes_3_7_down, genes_gt7_down))
+unique_3_7_down  <- setdiff(genes_3_7_down, union(genes_lt3_down, genes_gt7_down))
+unique_gt7_down  <- setdiff(genes_gt7_down, union(genes_lt3_down, genes_3_7_down))
+
+lt3_3_7_down <- intersect(genes_lt3_down, genes_3_7_down)
+only_lt3_3_7_down <- setdiff(lt3_3_7_down, genes_gt7_down)
+
+lt3_gt7_down <- intersect(genes_lt3_down, genes_gt7_down)
+only_lt3_gt7_down <- setdiff(lt3_gt7_down, genes_3_7_down)
+
+gt7_3_7_down <- intersect(genes_gt7_down, genes_3_7_down)
+only_3_7_gt7_down <- setdiff(gt7_3_7_down, genes_lt3_down)
+
+gene_sets <- list(
+  common_up = common_up,
+  unique_lt3_up = unique_lt3_up,
+  unique_3_7_up = unique_3_7_up,
+  unique_gt7_up = unique_gt7_up,
+  only_lt3_3_7_up = only_lt3_3_7_up,
+  only_lt3_gt7_up = only_lt3_gt7_up,
+  only_3_7_gt7_up = only_3_7_gt7_up,
+  common_down = common_down,
+  unique_lt3_down = unique_lt3_down,
+  unique_3_7_down = unique_3_7_down,
+  unique_gt7_down = unique_gt7_down,
+  only_lt3_3_7_down = only_lt3_3_7_down,
+  only_lt3_gt7_down = only_lt3_gt7_down,
+  only_3_7_gt7_down = only_3_7_gt7_down
+)
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+go_results_list <- list()
+
+for (set_name in names(gene_sets)) {
+  symbols <- gene_sets[[set_name]]
+
+  if (length(symbols) > 0) {
+    # Convert to ENTREZID
+    entrez <- bitr(symbols, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+    if (!is.null(entrez) && nrow(entrez) > 0) {
+      go <- enrichGO(
+        gene = unique(entrez$ENTREZID),
+        OrgDb = org.Hs.eg.db,
+        keyType = "ENTREZID",
+        ont = "BP",
+        pvalueCutoff = 0.05,
+        pAdjustMethod = "BH",
+        readable = TRUE
+      )
+
+      if (!is.null(go) && nrow(go@result) > 0) {
+        df <- as.data.frame(go@result)
+        df$gene_set <- set_name
+        go_results_list[[set_name]] <- df
+      }
+    }
+  }
+}
+
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+go_top_terms <- lapply(go_results_list, function(df) {
+  df <- df[order(df$p.adjust), ]  
+  df$Description                
+})
+
+max_len <- max(sapply(go_top_terms, length))
+
+go_top_terms_padded <- lapply(go_top_terms, function(x) {
+  length(x) <- max_len
+  return(x)
+})
+
+go_top_df <- as.data.frame(go_top_terms_padded, stringsAsFactors = FALSE)
+rownames(go_top_df) <- 1:max_len
+```
+
 
 ```{r}
-library(pheatmap)
-ntd <- vst(dds, blind = TRUE)
-top_genes <- head(foldchange_genes$gene, 20)
-mat <- assay(ntd)[top_genes, ]
-gene_symbols <- foldchange_genes$hgnc_symbol[match(top_genes, foldchange_genes$gene)]
-rownames(mat) <- ifelse(is.na(gene_symbols), top_genes, gene_symbols)
-pheatmap(mat,
-         annotation_col = coldata,
-         cluster_rows = TRUE,
-         cluster_cols = TRUE,
-         show_rownames = TRUE,
-         scale = "row")
+top_n_terms <- 7
+save_up_path <- "go_heatmap_up.png"
+save_dn_path <- "go_heatmap_down.png"
+
+go_combined <- bind_rows(go_results_list, .id = "gene_set")
+
+go_combined <- go_combined %>%
+  mutate(direction = if_else(str_detect(tolower(gene_set), "down"), "Downregulated", "Upregulated"))
+
+if (is.character(go_combined$GeneRatio)) {
+  go_combined <- go_combined %>%
+    mutate(GeneRatio = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])))
+}
+
+name_map <- c(
+  common_up           = "All Exposures",
+  only_lt3_3_7_up     = "<3 & 3–7",
+  only_3_7_gt7_up     = "3–7 & >7",
+  only_lt3_gt7_up     = "<3 & >7",
+  unique_lt3_up       = "<3 Unique",
+  unique_3_7_up       = "3–7 Unique",
+  unique_gt7_up       = ">7 Unique",
+  common_down         = "All Exposures",
+  only_lt3_3_7_down   = "<3 & 3–7",
+  only_3_7_gt7_down   = "3–7 & >7",
+  only_lt3_gt7_down   = "<3 & >7",
+  unique_lt3_down     = "<3 Unique",
+  unique_3_7_down     = "3–7 Unique",
+  unique_gt7_down     = ">7 Unique"
+)
+
+go_combined <- go_combined %>%
+  mutate(set_label = recode(gene_set, !!!name_map))
+
+order_up <- c("All Exposures", "<3 & 3–7", "3–7 & >7", "<3 & >7",
+              "<3 Unique", "3–7 Unique", ">7 Unique")
+order_dn <- c("All Exposures", "<3 & 3–7", "3–7 & >7", "<3 & >7",
+              "<3 Unique", "3–7 Unique", ">7 Unique")
+
+make_go_heatmap <- function(df, direction = c("Upregulated","Downregulated"),
+                            top_n = 7, outfile = NULL,
+                            col_levels = NULL,
+                            palette = "white",
+                            title = "") {
+  direction <- match.arg(direction)
+  d <- df %>% filter(direction == !!direction)
+  if (nrow(d) == 0) return(invisible(NULL))
+
+  d_top <- d %>%
+    group_by(set_label) %>%
+    arrange(desc(GeneRatio), .by_group = TRUE) %>%
+    slice_head(n = top_n) %>%
+    ungroup()
+
+  mat <- d_top %>%
+    dplyr::select(Description, set_label, GeneRatio) %>%
+    mutate(set_label = factor(set_label, levels = col_levels)) %>%
+    group_by(Description, set_label) %>%
+    summarise(GeneRatio = max(GeneRatio, na.rm = TRUE), .groups = "drop") %>%
+    complete(Description, set_label, fill = list(GeneRatio = 0))
+
+  term_order <- mat %>%
+    group_by(Description) %>%
+    summarise(max_ratio = max(GeneRatio), .groups = "drop") %>%
+    arrange(desc(max_ratio)) %>%
+    pull(Description)
+
+  mat <- mat %>%
+    mutate(Description = factor(Description, levels = rev(term_order)))
+
+  p <- ggplot(mat, aes(x = set_label, y = Description, fill = GeneRatio)) +
+    geom_tile() +
+    scale_fill_gradientn(colours = palette, name = "Gene Ratio") +
+    labs(title = title, x = "Gene Set", y = "GO Term") +
+    theme_minimal(base_size = 11) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(face = "bold", margin = margin(b = 6)),
+      panel.grid = element_blank()
+    )
+
+  if (!is.null(outfile)) {
+    ggsave(outfile, p,
+           width  = 10,
+           height =7,
+           dpi = 300)
+  }
+  print(p)
+  invisible(p)
+}
+
+heat_up <- make_go_heatmap(
+  go_combined,
+  direction = "Upregulated",
+  top_n = top_n_terms,
+  outfile = save_up_path,
+  col_levels = order_up,
+  palette = c("#deebf7", "#aed3e9", "#84bcdc", "#6baed6"),
+  title = ""
+)
+
+heat_dn <- make_go_heatmap(
+  go_combined,
+  direction = "Downregulated",
+  top_n = top_n_terms,
+  outfile = save_dn_path,
+  col_levels = order_dn,
+  palette = c("#feedde", "#fdbe85", "#d94701"),
+  title = ""
+)
+
+```
+
+### KEGG Enrichment
+
+-----------------
+
+```{r}
+# Input list
+kegg_input_list <- list(
+  "<3 days"  = protein_coding_less3,
+  "3–7 days" = protein_coding_days_3_7,
+  ">7 days"  = protein_coding_more_7
+)
+
+logFC_cutoff <- 1
+p_cutoff <- 0.05
+kegg_results_all <- list()
+
+for (group_name in names(kegg_input_list)) {
+  df <- kegg_input_list[[group_name]]
+
+  # Upregulated
+  filtered_up <- df %>% filter(log2FoldChange > logFC_cutoff, !is.na(hgnc_symbol), hgnc_symbol != "")
+  if (nrow(filtered_up) > 0) {
+    entrez_up <- bitr(filtered_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+    if (nrow(entrez_up) > 0) {
+      kegg_up <- enrichKEGG(gene = unique(as.character(entrez_up$ENTREZID)),
+                            organism = "hsa", keyType = "ncbi-geneid",
+                            pvalueCutoff = p_cutoff)
+      if (nrow(kegg_up@result) > 0) {
+        df_up <- as.data.frame(kegg_up)
+        df_up$group <- group_name
+        df_up$direction <- "Upregulated"
+        kegg_results_all[[paste0(group_name, "_up")]] <- df_up
+      }
+    }
+  }
+
+  # Downregulated
+  filtered_down <- df %>% filter(log2FoldChange < -logFC_cutoff, !is.na(hgnc_symbol), hgnc_symbol != "")
+  if (nrow(filtered_down) > 0) {
+    entrez_down <- bitr(filtered_down$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+    if (nrow(entrez_down) > 0) {
+      kegg_down <- enrichKEGG(gene = unique(as.character(entrez_down$ENTREZID)),
+                              organism = "hsa", keyType = "ncbi-geneid",
+                              pvalueCutoff = p_cutoff)
+      if (nrow(kegg_down@result) > 0) {
+        df_down <- as.data.frame(kegg_down)
+        df_down$group <- group_name
+        df_down$direction <- "Downregulated"
+        kegg_results_all[[paste0(group_name, "_down")]] <- df_down
+      }
+    }
+  }
+}
+
+kegg_results_df <- bind_rows(kegg_results_all)
+
+if (is.character(kegg_results_df$GeneRatio)) {
+  kegg_results_df <- kegg_results_df %>%
+    mutate(GeneRatio = sapply(strsplit(GeneRatio, "/"),
+                              function(x) as.numeric(x[1]) / as.numeric(x[2])))
+}
+
+```
+
+
+```{r}
+library(forcats)
+
+top_n_terms <- 6
+group_order <- c("<3 days", "3–7 days", ">7 days")
+
+kegg_top <- kegg_results_df %>%
+  group_by(group, direction) %>%
+  arrange(desc(GeneRatio), .by_group = TRUE) %>%
+  slice_head(n = top_n_terms) %>%
+  ungroup() %>%
+  mutate(group = factor(group, levels = group_order))
+
+kegg_top <- kegg_top %>%
+  group_by(direction, Description) %>%
+  mutate(max_ratio = max(GeneRatio)) %>%
+  ungroup() %>%
+  mutate(Description = fct_reorder(Description, max_ratio))
+
+kegg_top <- kegg_top %>%
+  mutate(direction = factor(direction, levels = c("Upregulated", "Downregulated")))
+
+up_df <- kegg_top %>%
+  filter(direction == "Upregulated") %>%
+  mutate(group = factor(group, levels = group_order)) %>%
+  group_by(Description) %>%
+  mutate(max_ratio = max(GeneRatio)) %>%
+  ungroup() %>%
+  mutate(Description = fct_reorder(Description, max_ratio))
+
+down_df <- kegg_top %>%
+  filter(direction == "Downregulated") %>%
+  mutate(group = factor(group, levels = group_order)) %>%
+  group_by(Description) %>%
+  mutate(max_ratio = max(GeneRatio)) %>%
+  ungroup() %>%
+  mutate(Description = fct_reorder(Description, max_ratio))
+
+
+pal_up   <- c("#deebf7", "#aed3e9", "#84bcdc", "#6baed6")
+pal_down  <- c("#feedde", "#fdbe85", "#d94701")
+
+
+p_kegg_sep_scales <-
+  ggplot() +
+  geom_tile(data = up_df,
+            aes(x = group, y = Description, fill = GeneRatio)) +
+  scale_fill_gradientn(colours = pal_up, name = "Gene Ratio (Up)") +
+  ggnewscale::new_scale_fill() +
+  geom_tile(data = down_df,
+            aes(x = group, y = Description, fill = GeneRatio)) +
+  scale_fill_gradientn(colours = pal_down, name = "Gene Ratio (Down)") +
+  facet_wrap(~direction, ncol = 2, scales = "free_y") +
+  labs(x = "Steroid Exposure", y = "KEGG Pathway") +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text = element_text(face = "bold", size = 12),
+    plot.background  = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggsave(filename = "KEGG.png", plot = p_kegg_sep_scales, width = 15, height = 5)
 ```
 
 

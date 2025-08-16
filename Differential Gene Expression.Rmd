@@ -4,7 +4,6 @@ output: html_document
 ---
 
 ```{r}
-library(tximport)
 library(readr)
 library(org.Hs.eg.db)
 library(AnnotationDbi)
@@ -18,117 +17,280 @@ library(clusterProfiler)
 library(enrichplot)
 library(dplyr)
 library(patchwork)
+library(DESeq2)
+library(biomaRt)
 ```
 
 ```{r}
-gene_data <-read.table("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_cc_c1_c2_GENCODE.txt")
-ncol(hist_var)
-colnames(hist_var)
-```
+clin_var <- read.csv('/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/clinical_variables_cc_c1_c2.csv')
+hist_var <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/histological_variables_cc_c1_c2.csv")
+combined <- merge(clin_var, hist_var, by = "ID")
 
-Control vs GCA 
-```{r}
-condition <- c()
+GCA_samples <-read.table("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_cc_c1_c2_GENCODE.txt")
+GCA_samples[] <- lapply(GCA_samples, as.numeric)
 
-for (name in names(gene_data)) {
-  if (str_sub(name, -2) == 'c1' | str_sub(name, -2) == 'c2') {
-    condition <- c(condition, 'GCA') 
-  } else {
-    condition <- c(condition, 'Control')
-  }
-}
+negatives_raw <- read.csv("/Users/kristinemedcalf/Desktop/Programming/Dissertation_GCA_Prediction/data/matrix_salmon_tximport_counts_c1-c4_ensembl_expanded.csv")
+rownames(negatives_raw) <- negatives_raw[[1]]  
+negatives <- negatives_raw[, -1]               
+negatives[] <- lapply(negatives, as.numeric)   
 
-condition <- factor(condition, levels = c("Control", "GCA"))
+true_negative <- c('12802', '12863', '12923', '14323', '14388', '14783', '18043', '18045', '18047', '18053', '18060', '18068', '18092', '19768', '19780', '19787')
 
-
-sample <- names(gene_data)
-
-coldata <- data.frame(sample = sample, condition = condition)
-coldata
-
-gene_data <- round(as.matrix(gene_data))  # round to nearest integer
-mode(gene_data) <- "numeric"              # ensure numeric mode
-# need to ask if raw counts? cause why decimal?
-
-dds <- DESeqDataSetFromMatrix(countData = gene_data,
-                              colData = coldata,
-                              design = ~ condition)
-
-dds <- DESeq(dds)
-
-
-res <- results(dds, contrast = c("condition", "GCA", "Control"))
-res_df <- as.data.frame(res)              
-res_df$gene <- rownames(res_df)           
-
-res_df$gene_symbol <- mapIds(org.Hs.eg.db,
-                                keys = rownames(res_df),
-                                column = "SYMBOL",
-                                keytype = "ENSEMBL",
-                                multiVals = "first")
-
-sig_genes <- res_df[!is.na(res_df$pvalue) & res_df$pvalue < 0.05, ]
-sig_genes <- sig_genes[, c("gene_symbol", "log2FoldChange", "pvalue", "padj")]
-
-# nothing significant when adjusted
+sample_ids <- substr(names(negatives), 2, 6)
+true_negative_samples <- names(negatives)[sample_ids %in% true_negative]
 ```
 
 Sort steroid exposure
 ```{r}
-
 combined <- combined %>%
   mutate(steroid_group = case_when(
     is.na(steroids_days)         ~ NA_character_,
-    GCA_present == 0             ~ "true_negative",
     steroids_days < 3            ~ "less_3",
     steroids_days < 5            ~ "days_3_4",
     steroids_days < 8            ~ "days_5_6_7",
     steroids_days >= 8           ~ "more_7"
   ))
-
+neg_df <- negatives[true_negative_samples]
 ```
 
-
-less than 3
+Steroid Exposure: less than 3
 ```{r}
+less_3 <- combined %>% filter(steroid_group == "less_3")
+less3_ids <- paste0("X", less_3$ID)
 
-df <- combined %>%
-  filter(steroid_group %in% c("less_3", "true_negative"))
+neg_ids <- true_negative_samples
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+less3_expr <- GCA_samples[, less3_ids, drop = FALSE]
+neg_expr   <- negatives[, neg_ids, drop = FALSE]
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+rownames(less3_expr) <- gsub("\\..*", "", rownames(less3_expr))
+rownames(neg_expr)   <- gsub("\\..*", "", rownames(neg_expr))
+
+common_genes <- intersect(rownames(less3_expr), rownames(neg_expr))
+less3_expr   <- less3_expr[common_genes, , drop = FALSE]
+neg_expr     <- neg_expr[common_genes, , drop = FALSE]
+
+gene_data <- cbind(less3_expr, neg_expr)
+gene_data[] <- lapply(gene_data, as.numeric)
+gene_data <- round(gene_data) ###
 
 coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "less_3"))
+  row.names = c(less3_ids, neg_ids),
+  group = factor(
+    c(rep("less_3", length(less3_ids)),
+      rep("true_negative", length(neg_ids))),
+    levels = c("true_negative", "less_3")
+  )
 )
 
 dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
+  countData = gene_data,
   colData = coldata,
-  design = ~ steroid_group
+  design = ~ group
 )
+
 dds <- DESeq(dds)
 
-res <- results(dds, contrast = c("steroid_group", "less_3", "true_negative"))
-
+res <- results(dds, contrast = c("group", "less_3", "true_negative"))
 res_df <- as.data.frame(res)
 res_df$gene <- rownames(res_df)
 
 res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
 
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
 annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+   attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype"),
+   filters = "ensembl_gene_id",
+   values = res_df$ensembl_clean,
+   mart = ensembl
+)
+
+res_df <- merge(res_df, annotations, by.x = "ensembl_clean", by.y = "ensembl_gene_id", all.x = TRUE)
+
+sig_genes <- res_df[!is.na(res_df$padj) & res_df$padj < 0.05, ]
+sig_genes <- sig_genes[order(sig_genes$padj), ]
+top_fc    <- sig_genes[order(-abs(sig_genes$log2FoldChange)), ]
+
+protein_coding <- top_fc[top_fc$gene_biotype == 'protein_coding', ]
+upregulated_strict <- protein_coding %>%
+  filter(log2FoldChange > 1)
+
+downregulated_strict <- protein_coding %>%
+  filter(log2FoldChange < -1)
+```
+
+```{r}
+
+# Set thresholds
+padj_cutoff <- 0.05
+lfc_cutoff <- 1
+
+# Prepare volcano_df with significance
+volcano_df <- protein_coding %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  mutate(
+    log10padj = -log10(padj),
+    significance = case_when(
+      padj < padj_cutoff & log2FoldChange >= lfc_cutoff  ~ "Upregulated",
+      padj < padj_cutoff & log2FoldChange <= -lfc_cutoff ~ "Downregulated",
+      TRUE                                                ~ "Not significant"
+    )
+  )
+
+# Choose how many genes to label
+top_up_n <- 5
+top_down_n <- 2
+
+# Select top upregulated and downregulated genes by absolute log2FC
+top_genes_up <- volcano_df %>%
+  filter(significance == "Upregulated") %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = top_up_n)
+
+top_genes_down <- volcano_df %>%
+  filter(significance == "Downregulated") %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = top_down_n)
+
+# Combine and offset labels
+top_genes <- bind_rows(top_genes_up, top_genes_down) %>%
+  mutate(
+    label_x = log2FoldChange + ifelse(log2FoldChange > 0, 0.5, -0.5),
+    label_y = log10padj + 0.5
+  )
+
+# Plot
+ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
+  geom_point(aes(color = significance), alpha = 0.7, size = 2) +
+  
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "firebrick3",
+      "Downregulated" = "dodgerblue3",
+      "Not significant" = "grey70"
+    )
+  ) +
+
+  # Threshold lines
+  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
+
+  # Labels and theme
+  labs(
+    title = "DEGs Between GCA Patients with <3 Days GC and Controls",
+    x = "Log2 Fold Change",
+    y = "-Log10 Adjusted P-value",
+    color = "Significance"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2))
+  ) +
+
+  # Labels
+  geom_text(
+    data = top_genes,
+    aes(x = label_x, y = label_y,
+        label = ifelse(!is.na(hgnc_symbol), hgnc_symbol, ensembl_clean)),
+    size = 4,
+    check_overlap = FALSE
+  )
+
+```
+
+```{r}
+top_genes <- protein_coding %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 30)
+
+vsd <- vst(dds, blind = FALSE)
+vsd_mat <- assay(vsd)
+
+heatmap_data <- vsd_mat[rownames(vsd_mat) %in% top_genes$gene, ]
+
+matching_symbols <- top_genes$hgnc_symbol[match(rownames(heatmap_data), top_genes$gene)]
+matching_symbols[is.na(matching_symbols) | matching_symbols == ""] <- rownames(heatmap_data)[is.na(matching_symbols) | matching_symbols == ""]
+rownames(heatmap_data) <- matching_symbols
+# Define group colors (change names and colors as needed)
+group_colors <- list(
+  group = c(
+    "true_negative" = "#1f78b4",
+    "less_3" = "#e31a1c"
+  )
+)
+
+# Create the annotation data frame
+annotation_col <- data.frame(group = coldata$group)
+rownames(annotation_col) <- rownames(coldata)
+
+# Plot the heatmap with group colors
+pheatmap(
+  heatmap_data,
+  annotation_col = annotation_col,
+  annotation_colors = group_colors,
+  scale = "row",
+  fontsize_row = 7,
+  show_rownames = TRUE,
+  cluster_cols = TRUE,
+  clustering_distance_rows = "euclidean",
+  clustering_method = "complete",
+)
+```
+
+
+Steriod Exposure: 3-4
+```{r}
+days_3_4 <- combined %>% filter(steroid_group == "days_3_4")
+days_3_4_ids <- paste0("X", days_3_4$ID)
+
+valid_days_3_4_ids <- days_3_4_ids[days_3_4_ids %in% names(GCA_samples)]
+neg_ids <- true_negative_samples
+
+days_3_4_expr <- GCA_samples[, valid_days_3_4_ids, drop = FALSE]
+neg_expr      <- negatives[, neg_ids, drop = FALSE]
+
+rownames(days_3_4_expr) <- gsub("\\..*", "", rownames(days_3_4_expr))
+rownames(neg_expr)      <- gsub("\\..*", "", rownames(neg_expr))
+
+common_genes <- intersect(rownames(days_3_4_expr), rownames(neg_expr))
+days_3_4_expr <- days_3_4_expr[common_genes, , drop = FALSE]
+neg_expr      <- neg_expr[common_genes, , drop = FALSE]
+
+gene_data <- cbind(days_3_4_expr, neg_expr)
+gene_data[] <- lapply(gene_data, as.numeric)
+gene_data <- round(gene_data)
+
+all_sample_ids <- colnames(gene_data)
+coldata <- data.frame(
+  row.names = all_sample_ids,
+  group = factor(
+    ifelse(all_sample_ids %in% valid_days_3_4_ids, "days_3_4", "true_negative"),
+    levels = c("true_negative", "days_3_4")
+  )
+)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_data,
+  colData = coldata,
+  design = ~ group
+)
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("group", "days_3_4", "true_negative"))
+res_df <- as.data.frame(res)
+res_df$gene <- rownames(res_df)
+
+res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+annotations <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype"),
   filters = "ensembl_gene_id",
   values = res_df$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
+res_df <- merge(
   res_df,
   annotations,
   by.x = "ensembl_clean",
@@ -136,53 +298,179 @@ res_df_annotated <- merge(
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- res_df %>% filter(!is.na(padj), padj < 0.05)
 sig_genes <- sig_genes[order(sig_genes$padj), ]
+top_fc    <- sig_genes[order(-abs(sig_genes$log2FoldChange)), ]
+protein_coding <- top_fc %>% filter(gene_biotype == "protein_coding")
+upregulated_strict <- protein_coding %>%
+  filter(log2FoldChange > 1)
 
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+downregulated_strict <- protein_coding %>%
+  filter(log2FoldChange < -1)
 ```
 
-3-4
+```{r}
+# Create a data frame with key info
+volcano_df <- res_df
+volcano_df$log10padj <- -log10(volcano_df$padj)
+
+# Set significance threshold
+padj_cutoff <- 0.05
+lfc_cutoff <- 1
+
+# Add significance category
+volcano_df$significance <- "Not Significant"
+volcano_df$significance[volcano_df$padj < padj_cutoff & abs(volcano_df$log2FoldChange) > lfc_cutoff] <- "Significant"
+volcano_df$significance <- factor(volcano_df$significance, levels = c("Not Significant", "Significant"))
+
+# Optional: label top genes
+top_genes <- volcano_df[volcano_df$significance == "Significant", ]
+top_genes <- top_genes[order(abs(top_genes$log2FoldChange), decreasing = TRUE), ]
+top_genes <- head(top_genes, 20)  # label top 10
+
+volcano_df <- res_df %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  mutate(
+    log10padj = -log10(padj),
+    significance = case_when(
+      padj < padj_cutoff & log2FoldChange >= lfc_cutoff  ~ "Upregulated",
+      padj < padj_cutoff & log2FoldChange <= -lfc_cutoff ~ "Downregulated",
+      TRUE                                                ~ "Not significant"
+    )
+  )
+
+# Plot
+ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
+  geom_point(aes(color = significance), alpha = 0.7, size = 2) +
+  
+  # Custom colors
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "firebrick3",
+      "Downregulated" = "dodgerblue3",
+      "Not significant" = "grey70"
+    )
+  ) +
+
+  # Threshold lines
+  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
+  theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2), color = "black")  # <- updated
+  ) +
+
+  # Labels
+  labs(
+    title = "DEGs Between GCA Patients with 3-4 Days GC and Controls",
+    x = "Log2 Fold Change",
+    y = "-Log10 Adjusted P-value",
+    color = "Significance"
+  ) +
+
+  # Add gene labels
+  geom_text(
+    data = top_genes,
+    aes(label = ifelse(!is.na(hgnc_symbol), hgnc_symbol, ensembl_clean)),
+    size = 4,
+    vjust = 1.5,
+    hjust = 1.5,
+    check_overlap = TRUE
+  )
+```
+
+```{r}
+top_genes <- protein_coding %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 30)
+
+vsd <- vst(dds, blind = FALSE)
+vsd_mat <- assay(vsd)
+
+heatmap_data <- vsd_mat[rownames(vsd_mat) %in% top_genes$gene, ]
+
+matching_symbols <- top_genes$hgnc_symbol[match(rownames(heatmap_data), top_genes$gene)]
+matching_symbols[is.na(matching_symbols) | matching_symbols == ""] <- rownames(heatmap_data)[is.na(matching_symbols) | matching_symbols == ""]
+rownames(heatmap_data) <- matching_symbols
+
+# Define group colors (change names and colors as needed)
+group_colors <- list(
+  group = c(
+    "true_negative" = "#1f78b4",
+    "days_3_4" = "#e31a1c"
+  )
+)
+
+# Create the annotation data frame
+annotation_col <- data.frame(group = coldata$group)
+rownames(annotation_col) <- rownames(coldata)
+
+# Plot the heatmap with group colors
+pheatmap(
+  heatmap_data,
+  annotation_col = annotation_col,
+  annotation_colors = group_colors,
+  scale = "row",
+  fontsize_row = 7,
+  show_rownames = TRUE,
+  cluster_cols = TRUE,
+  clustering_distance_rows = "euclidean",
+  clustering_method = "complete",
+)
+```
+
+Steriod Exposure: 5,6,7
 ```{r}
 
-df <- combined %>%
-  filter(steroid_group %in% c("days_3_4", "true_negative"))
+days_5_6_7 <- combined %>% filter(steroid_group == "days_5_6_7")
+days_5_6_7_ids <- paste0("X", days_5_6_7$ID)
+valid_days_5_6_7_ids <- days_5_6_7_ids[days_5_6_7_ids %in% names(GCA_samples)]
+neg_ids <- true_negative_samples
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+days_5_6_7_expr <- GCA_samples[, valid_days_5_6_7_ids, drop = FALSE]
+neg_expr <- negatives[, neg_ids, drop = FALSE]
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+rownames(days_5_6_7_expr) <- gsub("\\..*", "", rownames(days_5_6_7_expr))
+rownames(neg_expr) <- gsub("\\..*", "", rownames(neg_expr))
 
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+common_genes <- intersect(rownames(days_5_6_7_expr), rownames(neg_expr))
+days_5_6_7_expr <- days_5_6_7_expr[common_genes, , drop = FALSE]
+neg_expr <- neg_expr[common_genes, , drop = FALSE]
 
+gene_data <- cbind(days_5_6_7_expr, neg_expr)
+gene_data[] <- lapply(gene_data, as.numeric)
+gene_data <- round(gene_data)
+
+all_sample_ids <- colnames(gene_data)
 coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_3_4"))
+  row.names = all_sample_ids,
+  group = factor(
+    ifelse(all_sample_ids %in% valid_days_5_6_7_ids, "days_5_6_7", "true_negative"),
+    levels = c("true_negative", "days_5_6_7")
+  )
 )
 
 dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
+  countData = gene_data,
   colData = coldata,
-  design = ~ steroid_group
+  design = ~ group
 )
 dds <- DESeq(dds)
 
-res <- results(dds, contrast = c("steroid_group", "days_3_4", "true_negative"))
-
+res <- results(dds, contrast = c("group", "days_5_6_7", "true_negative"))
 res_df <- as.data.frame(res)
 res_df$gene <- rownames(res_df)
-
 res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
 
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
 annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype"),
   filters = "ensembl_gene_id",
   values = res_df$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
+res_df <- merge(
   res_df,
   annotations,
   by.x = "ensembl_clean",
@@ -190,107 +478,167 @@ res_df_annotated <- merge(
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- res_df %>% filter(!is.na(padj), padj < 0.05)
 sig_genes <- sig_genes[order(sig_genes$padj), ]
+top_fc <- sig_genes[order(-abs(sig_genes$log2FoldChange)), ]
+protein_coding <- top_fc %>% filter(gene_biotype == "protein_coding")
+upregulated_strict <- protein_coding %>%
+  filter(log2FoldChange > 1)
 
-
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+downregulated_strict <- protein_coding %>%
+  filter(log2FoldChange < -1)
 ```
 
-days_5_6_7
 ```{r}
-df <- combined %>%
-  filter(steroid_group %in% c("days_5_6_7", "true_negative"))
+# Create a data frame with key info
+volcano_df <- protein_coding
+volcano_df$log10padj <- -log10(volcano_df$padj)
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+# Set significance threshold
+padj_cutoff <- 0.05
+lfc_cutoff <- 1
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+# Add significance category
+volcano_df$significance <- "Not Significant"
+volcano_df$significance[volcano_df$padj < padj_cutoff & abs(volcano_df$log2FoldChange) > lfc_cutoff] <- "Significant"
+volcano_df$significance <- factor(volcano_df$significance, levels = c("Not Significant", "Significant"))
 
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+# Optional: label top genes
+top_genes <- volcano_df[volcano_df$significance == "Significant", ]
+top_genes <- top_genes[order(abs(top_genes$log2FoldChange), decreasing = TRUE), ]
+top_genes <- head(top_genes, 10)  # label top 10
 
-coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "days_5_6_7"))
-)
+volcano_df <- res_df %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  mutate(
+    log10padj = -log10(padj),
+    significance = case_when(
+      padj < padj_cutoff & log2FoldChange >= lfc_cutoff  ~ "Upregulated",
+      padj < padj_cutoff & log2FoldChange <= -lfc_cutoff ~ "Downregulated",
+      TRUE                                                ~ "Not significant"
+    )
+  )
 
-dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
-  colData = coldata,
-  design = ~ steroid_group
-)
-dds <- DESeq(dds)
+# Plot
+ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
+  geom_point(aes(color = significance), alpha = 0.7, size = 2) +
+  
+  # Custom colors
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "firebrick3",
+      "Downregulated" = "dodgerblue3",
+      "Not significant" = "grey70"
+    )
+  ) +
 
-res <- results(dds, contrast = c("steroid_group", "days_5_6_7", "true_negative"))
+  # Threshold lines
+  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
+  theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2), color = "black")  # <- updated
+  ) +
 
-res_df <- as.data.frame(res)
-res_df$gene <- rownames(res_df)
+  # Labels
+  labs(
+    title = "DEGs Between GCA Patients with 5-7 Days GC and Controls",
+    x = "Log2 Fold Change",
+    y = "-Log10 Adjusted P-value",
+    color = "Significance"
+  ) +
 
-res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
-
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
-  filters = "ensembl_gene_id",
-  values = res_df$ensembl_clean,
-  mart = ensembl
-)
-
-res_df_annotated <- merge(
-  res_df,
-  annotations,
-  by.x = "ensembl_clean",
-  by.y = "ensembl_gene_id",
-  all.x = TRUE
-)
-
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
-sig_genes <- sig_genes[order(sig_genes$padj), ]
-
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+  # Add gene labels
+  geom_text(
+    data = top_genes,
+    aes(label = ifelse(!is.na(hgnc_symbol), hgnc_symbol, ensembl_clean)),
+    size = 4,
+    vjust = 1.5,
+    check_overlap = TRUE
+  )
 ```
 
+```{r}
+top_genes <- protein_coding %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 30)
+
+vsd <- vst(dds, blind = FALSE)
+vsd_mat <- assay(vsd)
+
+heatmap_data <- vsd_mat[rownames(vsd_mat) %in% top_genes$gene, ]
+
+matching_symbols <- top_genes$hgnc_symbol[match(rownames(heatmap_data), top_genes$gene)]
+matching_symbols[is.na(matching_symbols) | matching_symbols == ""] <- rownames(heatmap_data)[is.na(matching_symbols) | matching_symbols == ""]
+rownames(heatmap_data) <- matching_symbols
+
+annotation_col <- data.frame(group = coldata$group)
+rownames(annotation_col) <- rownames(coldata)
+
+pheatmap(
+  heatmap_data,
+  annotation_col = annotation_col,
+  scale = "row",
+  fontsize_row = 7,
+  show_rownames = TRUE,
+  cluster_cols = TRUE,
+  clustering_distance_rows = "euclidean",
+  clustering_method = "complete",
+  main = "Top 30 Protein-Coding DEGs"
+)
+```
 
 more_7
 ```{r}
-df <- combined %>%
-  filter(steroid_group %in% c("more_7", "true_negative"))
+more_7 <- combined %>% filter(steroid_group == "more_7")
+more_7_ids <- paste0("X", more_7$ID)
+valid_more_7_ids <- more_7_ids[more_7_ids %in% names(GCA_samples)]
+neg_ids <- true_negative_samples
 
-col_ids <- str_sub(colnames(gene_data), 2)
-df_filtered <- df[df$ID %in% col_ids, ]
+more_7_expr <- GCA_samples[, valid_more_7_ids, drop = FALSE]
+neg_expr <- negatives[, neg_ids, drop = FALSE]
 
-df_filtered <- df_filtered[!is.na(df_filtered$steroid_group), ]
+rownames(more_7_expr) <- gsub("\\..*", "", rownames(more_7_expr))
+rownames(neg_expr) <- gsub("\\..*", "", rownames(neg_expr))
 
-gene_data_filtered <- gene_data[, paste0("X", df_filtered$ID)]
+common_genes <- intersect(rownames(more_7_expr), rownames(neg_expr))
+more_7_expr <- more_7_expr[common_genes, , drop = FALSE]
+neg_expr <- neg_expr[common_genes, , drop = FALSE]
 
+gene_data <- cbind(more_7_expr, neg_expr)
+gene_data[] <- lapply(gene_data, as.numeric)
+gene_data <- round(gene_data)
+
+all_sample_ids <- colnames(gene_data)
 coldata <- data.frame(
-  row.names = paste0("X", df_filtered$ID),
-  steroid_group = factor(df_filtered$steroid_group, levels = c("true_negative", "more_7"))
+  row.names = all_sample_ids,
+  group = factor(
+    ifelse(all_sample_ids %in% valid_more_7_ids, "more_7", "true_negative"),
+    levels = c("true_negative", "more_7")
+  )
 )
 
 dds <- DESeqDataSetFromMatrix(
-  countData = gene_data_filtered,
+  countData = gene_data,
   colData = coldata,
-  design = ~ steroid_group
+  design = ~ group
 )
 dds <- DESeq(dds)
 
-res <- results(dds, contrast = c("steroid_group", "more_7", "true_negative"))
-
+res <- results(dds, contrast = c("group", "more_7", "true_negative"))
 res_df <- as.data.frame(res)
 res_df$gene <- rownames(res_df)
-
 res_df$ensembl_clean <- gsub("\\..*", "", res_df$gene)
 
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
 annotations <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description", "gene_biotype"),
   filters = "ensembl_gene_id",
   values = res_df$ensembl_clean,
   mart = ensembl
 )
 
-res_df_annotated <- merge(
+res_df <- merge(
   res_df,
   annotations,
   by.x = "ensembl_clean",
@@ -298,33 +646,801 @@ res_df_annotated <- merge(
   all.x = TRUE
 )
 
-sig_genes <- res_df_annotated[!is.na(res_df_annotated$padj) & res_df_annotated$padj < 0.05, ]
+sig_genes <- res_df %>% filter(!is.na(padj), padj < 0.05)
 sig_genes <- sig_genes[order(sig_genes$padj), ]
+top_fc <- sig_genes[order(-abs(sig_genes$log2FoldChange)), ]
+protein_coding <- top_fc %>% filter(gene_biotype == "protein_coding")
+upregulated_strict <- protein_coding %>%
+  filter(log2FoldChange > 1)
 
-foldchange_genes <- sig_genes[rev(order(abs(sig_genes$log2FoldChange))), ]
+downregulated_strict <- protein_coding %>%
+  filter(log2FoldChange < -1)
 ```
 
 ```{r}
-library(pheatmap)
-ntd <- vst(dds, blind = TRUE)
-top_genes <- head(foldchange_genes$gene, 20)
-mat <- assay(ntd)[top_genes, ]
-gene_symbols <- foldchange_genes$hgnc_symbol[match(top_genes, foldchange_genes$gene)]
-rownames(mat) <- ifelse(is.na(gene_symbols), top_genes, gene_symbols)
-pheatmap(mat,
-         annotation_col = coldata,
-         cluster_rows = TRUE,
-         cluster_cols = TRUE,
-         show_rownames = TRUE,
-         scale = "row")
+# Set thresholds
+padj_cutoff <- 0.05
+lfc_cutoff <- 1
+
+# Prepare volcano_df with significance
+volcano_df <- protein_coding %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  mutate(
+    log10padj = -log10(padj),
+    significance = case_when(
+      padj < padj_cutoff & log2FoldChange >= lfc_cutoff  ~ "Upregulated",
+      padj < padj_cutoff & log2FoldChange <= -lfc_cutoff ~ "Downregulated",
+      TRUE                                                ~ "Not significant"
+    )
+  )
+
+# Choose how many genes to label
+top_up_n <- 5
+top_down_n <- 2
+
+# Select top upregulated and downregulated genes by absolute log2FC
+top_genes_up <- volcano_df %>%
+  filter(significance == "Upregulated") %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = top_up_n)
+top_genes_up
+top_genes_down <- volcano_df %>%
+  filter(significance == "Downregulated") %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = top_down_n)
+top_genes_down
+# Combine and offset labels
+top_genes <- bind_rows(top_genes_up, top_genes_down) %>%
+  mutate(
+    label_x = log2FoldChange + ifelse(log2FoldChange > 0, 0.5, -0.5),
+    label_y = log10padj + 0.5
+  )
+
+# Plot
+ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
+  geom_point(aes(color = significance), alpha = 0.7, size = 2) +
+  
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "firebrick3",
+      "Downregulated" = "dodgerblue3",
+      "Not significant" = "grey70"
+    )
+  ) +
+
+  # Threshold lines
+  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
+
+  # Labels and theme
+  labs(
+    title = "DEGs Between GCA Patients with <3 Days GC and Controls",
+    x = "Log2 Fold Change",
+    y = "-Log10 Adjusted P-value",
+    color = "Significance"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2))
+  ) +
+
+  # Labels
+  geom_text(
+    data = top_genes,
+    aes(x = label_x, y = label_y,
+        label = ifelse(!is.na(hgnc_symbol), hgnc_symbol, ensembl_clean)),
+    size = 4,
+    check_overlap = FALSE
+  )
 ```
 
-for each plot
-- heatmap of top 25 (Heatmap of the count matrix)
-- Heatmap of the sample-to-sample distances
-- MA-plot
-- Plot counts
+```{r}
+top_genes <- protein_coding %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 30)
 
-# might have to go through a manually put not found genes
+vsd <- vst(dds, blind = FALSE)
+vsd_mat <- assay(vsd)
 
-https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#why-un-normalized-counts
+heatmap_data <- vsd_mat[rownames(vsd_mat) %in% top_genes$gene, ]
+
+matching_symbols <- top_genes$hgnc_symbol[match(rownames(heatmap_data), top_genes$gene)]
+matching_symbols[is.na(matching_symbols) | matching_symbols == ""] <- rownames(heatmap_data)[is.na(matching_symbols) | matching_symbols == ""]
+rownames(heatmap_data) <- matching_symbols
+
+group_colors <- list(
+  group = c(
+    "true_negative" = "#1f78b4",
+    "more_7" = "#e31a1c"
+  )
+)
+
+# Create the annotation data frame
+annotation_col <- data.frame(group = coldata$group)
+rownames(annotation_col) <- rownames(coldata)
+
+# Plot the heatmap with group colors
+pheatmap(
+  heatmap_data,
+  annotation_col = annotation_col,
+  annotation_colors = group_colors,
+  scale = "row",
+  fontsize_row = 7,
+  show_rownames = TRUE,
+  cluster_cols = TRUE,
+  clustering_distance_rows = "euclidean",
+  clustering_method = "complete",
+)
+```
+
+```{r}
+gene_symbols <- top_genes$hgnc_symbol
+entrez_ids <- bitr(gene_symbols,
+                   fromType = "SYMBOL",
+                   toType = "ENTREZID",
+                   OrgDb = org.Hs.eg.db)
+
+ego <- enrichGO(gene         = entrez_ids$ENTREZID,
+                OrgDb        = org.Hs.eg.db,
+                keyType      = "ENTREZID",
+                ont          = "BP",  
+                pAdjustMethod = "BH",
+                pvalueCutoff = 0.05,
+                qvalueCutoff = 0.2,
+                readable     = TRUE)
+
+dotplot(ego, showCategory = 10, title = "GO Biological Process") +
+  ggplot2::theme(axis.text.y = ggplot2::element_text(size = 7, angle = 0, hjust = 1))
+```
+
+
+## 5. Pathway Analysis
+
+
+-----------------
+
+
+
+### GO Enrichment
+
+-----------------
+
+#### GO: Upregulated – <3 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+df <- rbind(protein_coding_less3, protein_coding_days_3_4, protein_coding_days_5_6_7)
+filtered <- df %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+go <- enrichGO(gene = unique(entrez$ENTREZID), OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", readable = TRUE)
+dotplot(go, showCategory = 10, title = "GO Upregulated: <7 Days")
+```
+
+#### GO: Downregulated – <3 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+filtered <- df %>% filter(log2FoldChange < -1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+go <- enrichGO(gene = unique(entrez$ENTREZID), OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", readable = TRUE)
+dotplot(go, showCategory = 10, title = "GO Downregulated: <7 Days")
+```
+
+#### GO: Upregulated – 3–7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+df <- protein_coding_days_3_7
+filtered <- df %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+go <- enrichGO(gene = unique(entrez$ENTREZID), OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", readable = TRUE)
+dotplot(go, showCategory = 10, title = "GO Upregulated: 3–7 Days")
+```
+
+#### GO: Downregulated – 3–7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+filtered <- df %>% filter(log2FoldChange < -1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+go <- enrichGO(gene = unique(entrez$ENTREZID), OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", readable = TRUE)
+dotplot(go, showCategory = 10, title = "GO Downregulated: 3–7 Days")
+```
+
+#### GO: Upregulated – >7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+df <- protein_coding_more_7
+filtered <- df %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+go <- enrichGO(gene = unique(entrez$ENTREZID), OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", readable = TRUE)
+dotplot(go, showCategory = 10, title = "GO Upregulated: >7 Days")
+```
+
+#### GO: Downregulated – >7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+filtered <- df %>% filter(log2FoldChange < -1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+go <- enrichGO(gene = unique(entrez$ENTREZID), OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", readable = TRUE)
+dotplot(go, showCategory = 10, title = "GO Downregulated: >7 Days")
+```
+
+### KEGG Enrichment
+
+-----------
+
+#### KEGG: Upregulated – <3 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+df <- rbind(protein_coding_less3, protein_coding_days_3_4, protein_coding_days_5_6_7)
+filtered <- df %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "kegg", pvalueCutoff = 0.05)
+dotplot(kegg, showCategory = 10, title = "KEGG Upregulated: <7 Days")
+```
+
+#### KEGG: Downregulated – <3 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+filtered <- df %>% filter(log2FoldChange < -1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "kegg", pvalueCutoff = 0.05)
+dotplot(kegg, showCategory = 10, title = "KEGG Downregulated: <7 Days")
+```
+
+#### KEGG: Upregulated – 3–7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+df <- protein_coding_days_3_7
+filtered <- df %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "kegg", pvalueCutoff = 0.05)
+dotplot(kegg, showCategory = 10, title = "KEGG Upregulated: 3–7 Days")
+```
+
+#### KEGG: Downregulated – 3–7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+filtered <- df %>% filter(log2FoldChange < -1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "kegg", pvalueCutoff = 0.05)
+dotplot(kegg, showCategory = 10, title = "KEGG Downregulated: 3–7 Days")
+```
+
+#### KEGG: Upregulated – >7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+df <- protein_coding_more_7
+filtered <- df %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "kegg", pvalueCutoff = 0.05)
+dotplot(kegg, showCategory = 10, title = "KEGG Upregulated: >7 Days")
+```
+
+#### KEGG: Downregulated – >7 Days
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+filtered <- df %>% filter(log2FoldChange < -1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+entrez <- bitr(filtered$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "kegg", pvalueCutoff = 0.05)
+dotplot(kegg, showCategory = 10, title = "KEGG Downregulated: >7 Days")
+```
+
+### CompareCluster
+
+-----------------
+
+#### <3 vs 3–7
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+lt3 <- rbind(protein_coding_less3, protein_coding_days_3_4)
+lt3_up <- lt3 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+lt3_ids <- bitr(lt3_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+three7_up <- protein_coding_days_3_7 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+three7_ids <- bitr(three7_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+gene_list <- list("lt3" = unique(lt3_ids$ENTREZID), "3_7" = unique(three7_ids$ENTREZID))
+compare <- compareCluster(geneCluster = gene_list, fun = "enrichGO", OrgDb = org.Hs.eg.db, ont = "BP", keyType = "ENTREZID", pvalueCutoff = 0.05)
+dotplot(compare, showCategory = 8, title = "GO Compare: <3 vs 3–7")
+```
+
+#### 3–7 vs >7
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+three7_up <- protein_coding_days_3_7 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+three7_ids <- bitr(three7_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+gt7_up <- protein_coding_more_7 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
+gt7_ids <- bitr(gt7_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+gene_list <- list("3_7" = unique(three7_ids$ENTREZID), "gt7" = unique(gt7_ids$ENTREZID))
+compare <- compareCluster(geneCluster = gene_list, fun = "enrichGO", OrgDb = org.Hs.eg.db, ont = "BP", keyType = "ENTREZID", pvalueCutoff = 0.05)
+dotplot(compare, showCategory = 8, title = "GO Compare: 3–7 vs >7")
+```
+
+```{r}
+# Significant DEGs (padj < 0.05)
+deg_less3   <- rownames(res_less3[which(res_less3$padj < 0.05), ])
+deg_3_7     <- rownames(res_days_3_7[which(res_days_3_7$padj < 0.05), ])
+deg_more7   <- rownames(res_more_7[which(res_more_7$padj < 0.05), ])
+
+# Counts of unique vs shared
+all_degs <- list("<3d" = deg_less3, "3-7d" = deg_3_7, ">7d" = deg_more7)
+
+library(VennDiagram)
+venn.plot <- venn.diagram(
+  x = all_degs,
+  filename = NULL,
+  fill = c("#E41A1C", "#4DAF4A", "#377EB8"),
+  alpha = 0.5,
+  cat.cex = 1.2
+)
+grid::grid.draw(venn.plot)
+
+# Numbers
+lengths(all_degs)                         # total per group
+length(Reduce(intersect, all_degs))       # shared across all groups
+
+# Extract top 50 by |log2FC|
+topN <- 50
+top_less3 <- rownames(head(res_less3[order(abs(res_less3$log2FoldChange), decreasing = TRUE), ], topN))
+top_3_7   <- rownames(head(res_days_3_7[order(abs(res_days_3_7$log2FoldChange), decreasing = TRUE), ], topN))
+top_more7 <- rownames(head(res_more_7[order(abs(res_more_7$log2FoldChange), decreasing = TRUE), ], topN))
+
+# Overlap
+Reduce(intersect, list(top_less3, top_3_7, top_more7))
+length(Reduce(intersect, list(top_less3, top_3_7, top_more7))) # how many overlap
+
+# Create data frames of log2FC for shared genes
+fc_df <- data.frame(
+  less3 = res_less3$log2FoldChange,
+  day3_7 = res_days_3_7$log2FoldChange,
+  more7 = res_more_7$log2FoldChange
+)
+rownames(fc_df) <- rownames(res_less3)
+
+# Keep only complete cases (no NA)
+fc_df <- na.omit(fc_df)
+
+# Correlation matrix
+cor_mat <- cor(fc_df, method = "pearson")
+cor_mat
+
+# Example: correlation less3 vs 3-7
+cor(fc_df$less3, fc_df$day3_7, use = "complete.obs")
+
+```
+
+### Gene Set Enrichment Analysis (GSEA)
+
+#### <3
+
+```{r}
+# Prepare ranked gene list for GSEA
+less3_ranks <- res_df_less3 %>%
+  filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
+  group_by(hgnc_symbol) %>% 
+  summarise(score = mean(log2FoldChange)) %>%
+  arrange(desc(score))
+
+# Convert to ENTREZ IDs
+entrez_ids <- bitr(less3_ranks$hgnc_symbol, fromType = "SYMBOL",
+                   toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+# Join ranks with ENTREZ IDs
+less3_ranks <- left_join(entrez_ids, less3_ranks, by = c("SYMBOL" = "hgnc_symbol")) %>%
+  distinct(ENTREZID, .keep_all = TRUE) %>%
+  drop_na()
+
+geneList_less3 <- less3_ranks$score
+names(geneList_less3) <- less3_ranks$ENTREZID
+geneList_less3 <- sort(geneList_less3, decreasing = TRUE)
+
+# Run GSEA
+gsea_less3 <- gseGO(
+  geneList = geneList_less3,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  keyType = "ENTREZID",
+  minGSSize = 10,
+  maxGSSize = 500,
+  pvalueCutoff = 0.05,
+  verbose = FALSE
+)
+
+dotplot(gsea_less3, showCategory = 9, title = "GSEA – <3 Days (BP)")
+
+```
+
+#### 3-7
+
+```{r}
+# 1. Prepare ranked gene list (log2FoldChange named by SYMBOL)
+gsea_input <- res_df_days_3_7 %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
+  dplyr::distinct(hgnc_symbol, .keep_all = TRUE) %>%
+  dplyr::arrange(desc(log2FoldChange)) %>%
+  dplyr::pull(log2FoldChange)
+
+names(gsea_input) <- res_df_days_3_7 %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
+  dplyr::distinct(hgnc_symbol, .keep_all = TRUE) %>%
+  dplyr::pull(hgnc_symbol)
+
+gsea_input <- sort(gsea_input, decreasing = TRUE)  # Must be sorted
+
+# 2. Run GSEA for GO Biological Process (BP)
+gsea_result <- gseGO(
+  geneList = gsea_input,
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  minGSSize = 10,
+  maxGSSize = 500,
+  pvalueCutoff = 0.05,
+  verbose = FALSE
+)
+
+# 3. Plot results
+dotplot(gsea_result, showCategory = 10, title = "GSEA – GO Biological Process")
+
+```
+
+#### >7
+```{r}
+# Prepare ranked gene list
+gt7_ranks <- res_df_more_7 %>%
+  filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
+  group_by(hgnc_symbol) %>% 
+  summarise(score = mean(log2FoldChange)) %>%
+  arrange(desc(score))
+
+# Convert symbols to Entrez IDs
+entrez_ids <- bitr(gt7_ranks$hgnc_symbol, fromType = "SYMBOL",
+                   toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+# Merge and clean gene list
+gt7_ranks <- left_join(entrez_ids, gt7_ranks, by = c("SYMBOL" = "hgnc_symbol")) %>%
+  distinct(ENTREZID, .keep_all = TRUE) %>%
+  drop_na()
+
+# Format for GSEA
+geneList_gt7 <- gt7_ranks$score
+names(geneList_gt7) <- gt7_ranks$ENTREZID
+geneList_gt7 <- sort(geneList_gt7, decreasing = TRUE)
+
+# Run GSEA
+gsea_gt7 <- gseGO(
+  geneList = geneList_gt7,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  keyType = "ENTREZID",
+  minGSSize = 10,
+  maxGSSize = 500,
+  pvalueCutoff = 0.05,
+  verbose = FALSE
+)
+
+dotplot(gsea_gt7, showCategory = 9, title = "GSEA – >7 Days (BP)")
+
+```
+
+#### Gene Analysis
+
+```{r}
+# Upregulated gene lists
+genes_lt3_up <- upregulated_strict_less3$hgnc_symbol
+genes_3_7_up <- upregulated_strict_days_3_7$hgnc_symbol
+genes_gt7_up <- upregulated_strict_more_7$hgnc_symbol
+
+common_up <- Reduce(intersect, list(genes_lt3_up, genes_3_7_up, genes_gt7_up))
+
+unique_lt3_up  <- setdiff(genes_lt3_up, union(genes_3_7_up, genes_gt7_up))
+unique_3_7_up  <- setdiff(genes_3_7_up, union(genes_lt3_up, genes_gt7_up))
+unique_gt7_up  <- setdiff(genes_gt7_up, union(genes_lt3_up, genes_3_7_up))
+
+lt3_3_7_up <- intersect(genes_lt3_up, genes_3_7_up)
+only_lt3_3_7_up <- setdiff(lt3_3_7_up, genes_gt7_up)
+
+lt3_gt7_up <- intersect(genes_lt3_up, genes_gt7_up)
+only_lt3_gt7_up <- setdiff(lt3_gt7_up, genes_3_7_up)
+
+gt7_3_7_up <- intersect(genes_gt7_up, genes_3_7_up)
+only_3_7_gt7_up <- setdiff(gt7_3_7_up, genes_lt3_up)
+
+# Downregulated gene lists
+genes_lt3_down <- downregulated_strict_less3$hgnc_symbol
+genes_3_7_down <- downregulated_strict_days_3_7$hgnc_symbol
+genes_gt7_down <- downregulated_strict_more_7$hgnc_symbol
+
+# Intersections and unique sets
+common_down <- Reduce(intersect, list(genes_lt3_down, genes_3_7_down, genes_gt7_down))
+
+unique_lt3_down  <- setdiff(genes_lt3_down, union(genes_3_7_down, genes_gt7_down))
+unique_3_7_down  <- setdiff(genes_3_7_down, union(genes_lt3_down, genes_gt7_down))
+unique_gt7_down  <- setdiff(genes_gt7_down, union(genes_lt3_down, genes_3_7_down))
+
+lt3_3_7_down <- intersect(genes_lt3_down, genes_3_7_down)
+only_lt3_3_7_down <- setdiff(lt3_3_7_down, genes_gt7_down)
+
+lt3_gt7_down <- intersect(genes_lt3_down, genes_gt7_down)
+only_lt3_gt7_down <- setdiff(lt3_gt7_down, genes_3_7_down)
+
+gt7_3_7_down <- intersect(genes_gt7_down, genes_3_7_down)
+only_3_7_gt7_down <- setdiff(gt7_3_7_down, genes_lt3_down)
+
+gene_sets <- list(
+  common_up = common_up,
+  unique_lt3_up = unique_lt3_up,
+  unique_3_7_up = unique_3_7_up,
+  unique_gt7_up = unique_gt7_up,
+  only_lt3_3_7_up = only_lt3_3_7_up,
+  only_lt3_gt7_up = only_lt3_gt7_up,
+  only_3_7_gt7_up = only_3_7_gt7_up,
+  common_down = common_down,
+  unique_lt3_down = unique_lt3_down,
+  unique_3_7_down = unique_3_7_down,
+  unique_gt7_down = unique_gt7_down,
+  only_lt3_3_7_down = only_lt3_3_7_down,
+  only_lt3_gt7_down = only_lt3_gt7_down,
+  only_3_7_gt7_down = only_3_7_gt7_down
+)
+```
+
+```{r}
+# Initialize list to hold GO results
+go_results_list <- list()
+
+# Loop over each gene set
+for (set_name in names(gene_sets)) {
+  symbols <- gene_sets[[set_name]]
+
+  if (length(symbols) > 0) {
+    # Convert to ENTREZID
+    entrez <- bitr(symbols, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+    if (!is.null(entrez) && nrow(entrez) > 0) {
+      # Run GO enrichment
+      go <- enrichGO(
+        gene = unique(entrez$ENTREZID),
+        OrgDb = org.Hs.eg.db,
+        keyType = "ENTREZID",
+        ont = "BP",
+        pvalueCutoff = 0.05,
+        pAdjustMethod = "BH",
+        readable = TRUE
+      )
+
+      if (!is.null(go) && nrow(go@result) > 0) {
+        df <- as.data.frame(go@result)
+        df$gene_set <- set_name
+        go_results_list[[set_name]] <- df
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+# Extract all GO term descriptions for each enrichment result
+go_top_terms <- lapply(go_results_list, function(df) {
+  df <- df[order(df$p.adjust), ]   # sort by adjusted p-value
+  df$Description                  # keep all descriptions
+})
+
+# Determine max length (to pad shorter sets)
+max_len <- max(sapply(go_top_terms, length))
+
+# Pad each list with NA so all columns align
+go_top_terms_padded <- lapply(go_top_terms, function(x) {
+  length(x) <- max_len
+  return(x)
+})
+
+# Convert to data.frame
+go_top_df <- as.data.frame(go_top_terms_padded, stringsAsFactors = FALSE)
+rownames(go_top_df) <- 1:max_len
+
+# View table
+print(go_top_df)
+
+```
+
+
+
+| Tier | Genes to analyze                | Purpose                    |
+| ---- | ------------------------------- | -------------------------- |
+| 1    | Top 30 L2FC                     | Unbiased strongest signals |
+| 2    | Known GCA-related genes         | Biological relevance       | 
+| 3    | Steroid-response genes          | Mechanism of treatment     |
+| 4    | Genes in enriched GO/KEGG terms | Connect stats to biology   |
+
+*need to look at 2-3 also within the Venn diagram section
+
+
+#### PCA
+
+```{r}
+counts_less3 <- counts(dds_less3)
+counts_3_7    <- counts(dds_days_3_7)
+counts_more7  <- counts(dds_more_7)
+
+colnames(counts_less3) <- paste0("less3_", colnames(counts_less3))
+colnames(counts_3_7)   <- paste0("3_7_", colnames(counts_3_7))
+colnames(counts_more7) <- paste0("more7_", colnames(counts_more7))
+
+counts_combined <- cbind(counts_less3, counts_3_7, counts_more7)
+
+coldata_less3 <- colData(dds_less3) %>% as.data.frame() %>%
+  mutate(exposure_group = "<3d")
+rownames(coldata_less3) <- colnames(counts_less3)
+
+coldata_3_7 <- colData(dds_days_3_7) %>% as.data.frame() %>%
+  mutate(exposure_group = "3-7d")
+rownames(coldata_3_7) <- colnames(counts_3_7)
+
+coldata_more7 <- colData(dds_more_7) %>% as.data.frame() %>%
+  mutate(exposure_group = ">7d")
+rownames(coldata_more7) <- colnames(counts_more7)
+
+coldata_combined <- bind_rows(coldata_less3, coldata_3_7, coldata_more7)
+rownames(coldata_combined) <- colnames(counts_combined)
+
+coldata_combined$exposure_group <- factor(
+  coldata_combined$exposure_group,
+  levels = c("<3d", "3-7d", ">7d")
+)
+
+dds_all <- DESeqDataSetFromMatrix(
+  countData = counts_combined,
+  colData = coldata_combined,
+  design = ~ exposure_group
+)
+
+dds_all <- dds_all[rowSums(counts(dds_all)) > 10, ]
+
+vsd_all <- vst(dds_all, blind = FALSE)
+
+```
+
+
+```{r}
+library(ggplot2)
+library(vegan)
+library(ggpubr)
+library(ggrepel)
+
+pcaData <- plotPCA(vsd_all, intgroup = "exposure_group", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+adonis_result <- adonis2(t(assay(vsd_all)) ~ exposure_group, data = as.data.frame(colData(vsd_all)))
+p_val <- adonis_result$`Pr(>F)`[1]
+r2_val <- round(adonis_result$R2[1], 3)
+adonis_label <- paste0("PERMANOVA: R² = ", r2_val, ", p = ", format.pval(p_val, digits = 3, eps = .001))
+
+b <- ggplot(pcaData, aes(x = PC1, y = PC2, color = exposure_group)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(type = "norm", linetype = "dashed", level = 0.68) +
+  scale_color_manual(values = c("<3d" = "#E41A1C", "3-7d" = "#4DAF4A", ">7d" = "#377EB8")) +
+  xlab(paste0("PC1 (", percentVar[1], "%)")) +
+  ylab(paste0("PC2 (", percentVar[2], "%)")) +
+  labs(title = "PCA of Variance-Stabilized Gene Expression",
+       subtitle = adonis_label,
+       color = "Steroid Exposure") +
+  theme_bw(base_size = 14)
+```
+
+```{r}
+loadings <- prcomp(t(assay(vsd_all)))$rotation
+loadings <- as.data.frame(loadings)
+loadings$gene <- rownames(loadings)
+
+top_loadings <- loadings %>%
+  mutate(loading_strength = sqrt(PC1^2 + PC2^2)) %>%
+  arrange(desc(loading_strength)) %>%
+  mutate(label = ifelse(row_number() <= 10, gene, "")) # top 10 genes labelled
+
+c <- ggplot(top_loadings, aes(PC1, PC2, colour = loading_strength, label = label)) +
+  geom_point(size = 3, alpha = 0.9) +
+  geom_text_repel(size = 4, box.padding = 0.5, point.padding = 0.4) +
+  scale_color_gradientn(
+    colours = c("#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#e0c932"),
+    name = "Loading\nStrength"
+  ) +
+  labs(title = "Top Gene Loadings on PCA Axes",
+       x = "PC1 Loading", y = "PC2 Loading") +
+  theme_bw(base_size = 14)
+```
+
+#### Heatmap Plot
+
+```{r, fig.height=}
+expr_mat <- assay(vsd_all)[rownames(vsd_all) %in% rownames(top_loadings)[1:40], ] # top 50 genes
+scaled_expr <- t(scale(t(expr_mat)))
+
+group_annot <- data.frame(Group = colData(vsd_all)$exposure_group)
+rownames(group_annot) <- colnames(scaled_expr)
+
+ha <- HeatmapAnnotation(
+  Group = group_annot$Group,
+  col = list(Group = c("<3d" = "#E41A1C", "3-7d" = "#4DAF4A", ">7d" = "#377EB8"))
+)
+
+col_fun <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+
+a <- Heatmap(
+  scaled_expr,
+  name = "z-score",
+  top_annotation = ha,
+  col = col_fun,
+  show_row_names = TRUE,
+  show_column_names = FALSE,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  column_split = group_annot$Group,
+  row_names_gp = gpar(fontsize = 8),
+  column_title = "Grouped by Steroid Exposure"
+)
+
+```
+#### Volcano Plot
+
+```{r}
+mart <- useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl")
+
+gene_anno <- getBM(
+  attributes = c("ensembl_gene_id", "gene_biotype", "chromosome_name"),
+  mart = mart
+) %>%
+  rename(gene = ensembl_gene_id, biotype = gene_biotype, chromosome = chromosome_name)
+
+make_volcano_df <- function(res, gene_anno, lfc_cutoff = 1, padj_cutoff = 0.05) {
+  res_df <- as.data.frame(res) %>%
+    rownames_to_column("gene") %>%
+    left_join(gene_anno, by = "gene") %>%
+    filter(
+      !is.na(log2FoldChange),
+      !is.na(padj),
+      biotype == "protein_coding",
+      chromosome %in% as.character(1:22)
+    ) %>%
+    mutate(
+      log10padj = -log10(padj),
+      significance = case_when(
+        padj < padj_cutoff & log2FoldChange >=  lfc_cutoff ~ "Upregulated",
+        padj < padj_cutoff & log2FoldChange <= -lfc_cutoff ~ "Downregulated",
+        TRUE                                               ~ "Not significant"
+      )
+    )
+  return(res_df)
+}
+
+vol_less3  <- make_volcano_df(res_less3, gene_anno)
+vol_3_7    <- make_volcano_df(res_days_3_7, gene_anno)
+vol_more7  <- make_volcano_df(res_more_7, gene_anno)
+
+plot_volcano <- function(df, title, lfc_cutoff = 1, padj_cutoff = 0.05) {
+  ggplot(df, aes(x = log2FoldChange, y = log10padj)) +
+    annotate("rect", xmin = -Inf, xmax = -lfc_cutoff, ymin = -log10(padj_cutoff), ymax = Inf, fill = "#d9f0d3", alpha = 0.3) +
+    annotate("rect", xmin = lfc_cutoff, xmax = Inf, ymin = -log10(padj_cutoff), ymax = Inf, fill = "#fee0d2", alpha = 0.3) +
+    geom_point(aes(color = significance), alpha = 0.8, size = 1.5) +
+    scale_color_manual(
+      values = c(
+        "Upregulated" = "firebrick3",
+        "Downregulated" = "steelblue3",
+        "Not significant" = "grey70"
+      )
+    ) +
+    geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
+    geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
+    labs(
+      title = title,
+      x = expression(log[2]~Fold~Change),
+      y = expression(-log[10]~Adjusted~P)
+    ) +
+    ylim(0, 250) +
+    theme_grey() +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+      axis.text = element_text(size = 10),
+      axis.title = element_text(size = 12),
+      panel.grid.major = element_line(color = "white"),
+      legend.position = "none"
+    )
+}
+
+p1 <- plot_volcano(vol_less3, "<3 Days")
+p2 <- plot_volcano(vol_3_7, "3–7 Days")
+p3 <- plot_volcano(vol_more7, ">7 Days")
+
+combined <- p1 + p2 + p3 + plot_layout(nrow = 1)
+print(combined)
+
+```
+
+
