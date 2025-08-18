@@ -120,12 +120,9 @@ downregulated_strict <- protein_coding %>%
 ```
 
 ```{r}
-
-# Set thresholds
 padj_cutoff <- 0.05
 lfc_cutoff <- 1
 
-# Prepare volcano_df with significance
 volcano_df <- protein_coding %>%
   filter(!is.na(padj), !is.na(log2FoldChange)) %>%
   mutate(
@@ -137,11 +134,9 @@ volcano_df <- protein_coding %>%
     )
   )
 
-# Choose how many genes to label
 top_up_n <- 5
 top_down_n <- 2
 
-# Select top upregulated and downregulated genes by absolute log2FC
 top_genes_up <- volcano_df %>%
   filter(significance == "Upregulated") %>%
   arrange(desc(abs(log2FoldChange))) %>%
@@ -152,14 +147,12 @@ top_genes_down <- volcano_df %>%
   arrange(desc(abs(log2FoldChange))) %>%
   slice_head(n = top_down_n)
 
-# Combine and offset labels
 top_genes <- bind_rows(top_genes_up, top_genes_down) %>%
   mutate(
     label_x = log2FoldChange + ifelse(log2FoldChange > 0, 0.5, -0.5),
     label_y = log10padj + 0.5
   )
 
-# Plot
 ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
   geom_point(aes(color = significance), alpha = 0.7, size = 2) +
   
@@ -171,11 +164,9 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     )
   ) +
 
-  # Threshold lines
   geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
   geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
 
-  # Labels and theme
   labs(
     title = "DEGs Between GCA Patients with <3 Days GC and Controls",
     x = "Log2 Fold Change",
@@ -187,7 +178,6 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2))
   ) +
 
-  # Labels
   geom_text(
     data = top_genes,
     aes(x = label_x, y = label_y,
@@ -211,7 +201,7 @@ heatmap_data <- vsd_mat[rownames(vsd_mat) %in% top_genes$gene, ]
 matching_symbols <- top_genes$hgnc_symbol[match(rownames(heatmap_data), top_genes$gene)]
 matching_symbols[is.na(matching_symbols) | matching_symbols == ""] <- rownames(heatmap_data)[is.na(matching_symbols) | matching_symbols == ""]
 rownames(heatmap_data) <- matching_symbols
-# Define group colors (change names and colors as needed)
+
 group_colors <- list(
   group = c(
     "true_negative" = "#1f78b4",
@@ -219,11 +209,9 @@ group_colors <- list(
   )
 )
 
-# Create the annotation data frame
 annotation_col <- data.frame(group = coldata$group)
 rownames(annotation_col) <- rownames(coldata)
 
-# Plot the heatmap with group colors
 pheatmap(
   heatmap_data,
   annotation_col = annotation_col,
@@ -310,20 +298,16 @@ downregulated_strict <- protein_coding %>%
 ```
 
 ```{r}
-# Create a data frame with key info
 volcano_df <- res_df
 volcano_df$log10padj <- -log10(volcano_df$padj)
 
-# Set significance threshold
 padj_cutoff <- 0.05
 lfc_cutoff <- 1
 
-# Add significance category
 volcano_df$significance <- "Not Significant"
 volcano_df$significance[volcano_df$padj < padj_cutoff & abs(volcano_df$log2FoldChange) > lfc_cutoff] <- "Significant"
 volcano_df$significance <- factor(volcano_df$significance, levels = c("Not Significant", "Significant"))
 
-# Optional: label top genes
 top_genes <- volcano_df[volcano_df$significance == "Significant", ]
 top_genes <- top_genes[order(abs(top_genes$log2FoldChange), decreasing = TRUE), ]
 top_genes <- head(top_genes, 20)  # label top 10
@@ -339,11 +323,9 @@ volcano_df <- res_df %>%
     )
   )
 
-# Plot
 ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
   geom_point(aes(color = significance), alpha = 0.7, size = 2) +
   
-  # Custom colors
   scale_color_manual(
     values = c(
       "Upregulated" = "firebrick3",
@@ -352,15 +334,13 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     )
   ) +
 
-  # Threshold lines
   geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
   geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
   theme_classic() +
   theme(
-    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2), color = "black")  # <- updated
+    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2), color = "black") 
   ) +
 
-  # Labels
   labs(
     title = "DEGs Between GCA Patients with 3-4 Days GC and Controls",
     x = "Log2 Fold Change",
@@ -368,7 +348,6 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     color = "Significance"
   ) +
 
-  # Add gene labels
   geom_text(
     data = top_genes,
     aes(label = ifelse(!is.na(hgnc_symbol), hgnc_symbol, ensembl_clean)),
@@ -393,7 +372,6 @@ matching_symbols <- top_genes$hgnc_symbol[match(rownames(heatmap_data), top_gene
 matching_symbols[is.na(matching_symbols) | matching_symbols == ""] <- rownames(heatmap_data)[is.na(matching_symbols) | matching_symbols == ""]
 rownames(heatmap_data) <- matching_symbols
 
-# Define group colors (change names and colors as needed)
 group_colors <- list(
   group = c(
     "true_negative" = "#1f78b4",
@@ -401,11 +379,9 @@ group_colors <- list(
   )
 )
 
-# Create the annotation data frame
 annotation_col <- data.frame(group = coldata$group)
 rownames(annotation_col) <- rownames(coldata)
 
-# Plot the heatmap with group colors
 pheatmap(
   heatmap_data,
   annotation_col = annotation_col,
@@ -490,23 +466,19 @@ downregulated_strict <- protein_coding %>%
 ```
 
 ```{r}
-# Create a data frame with key info
 volcano_df <- protein_coding
 volcano_df$log10padj <- -log10(volcano_df$padj)
 
-# Set significance threshold
 padj_cutoff <- 0.05
 lfc_cutoff <- 1
 
-# Add significance category
 volcano_df$significance <- "Not Significant"
 volcano_df$significance[volcano_df$padj < padj_cutoff & abs(volcano_df$log2FoldChange) > lfc_cutoff] <- "Significant"
 volcano_df$significance <- factor(volcano_df$significance, levels = c("Not Significant", "Significant"))
 
-# Optional: label top genes
 top_genes <- volcano_df[volcano_df$significance == "Significant", ]
 top_genes <- top_genes[order(abs(top_genes$log2FoldChange), decreasing = TRUE), ]
-top_genes <- head(top_genes, 10)  # label top 10
+top_genes <- head(top_genes, 10)  
 
 volcano_df <- res_df %>%
   filter(!is.na(padj), !is.na(log2FoldChange)) %>%
@@ -519,11 +491,9 @@ volcano_df <- res_df %>%
     )
   )
 
-# Plot
 ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
   geom_point(aes(color = significance), alpha = 0.7, size = 2) +
   
-  # Custom colors
   scale_color_manual(
     values = c(
       "Upregulated" = "firebrick3",
@@ -532,15 +502,13 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     )
   ) +
 
-  # Threshold lines
   geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", color = "black") +
   geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", color = "black") +
   theme_classic() +
   theme(
-    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2), color = "black")  # <- updated
+    plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2), color = "black") 
   ) +
 
-  # Labels
   labs(
     title = "DEGs Between GCA Patients with 5-7 Days GC and Controls",
     x = "Log2 Fold Change",
@@ -548,7 +516,6 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     color = "Significance"
   ) +
 
-  # Add gene labels
   geom_text(
     data = top_genes,
     aes(label = ifelse(!is.na(hgnc_symbol), hgnc_symbol, ensembl_clean)),
@@ -662,7 +629,6 @@ downregulated_strict <- protein_coding %>%
 padj_cutoff <- 0.05
 lfc_cutoff <- 1
 
-# Prepare volcano_df with significance
 volcano_df <- protein_coding %>%
   filter(!is.na(padj), !is.na(log2FoldChange)) %>%
   mutate(
@@ -678,7 +644,6 @@ volcano_df <- protein_coding %>%
 top_up_n <- 5
 top_down_n <- 2
 
-# Select top upregulated and downregulated genes by absolute log2FC
 top_genes_up <- volcano_df %>%
   filter(significance == "Upregulated") %>%
   arrange(desc(abs(log2FoldChange))) %>%
@@ -689,7 +654,7 @@ top_genes_down <- volcano_df %>%
   arrange(desc(abs(log2FoldChange))) %>%
   slice_head(n = top_down_n)
 top_genes_down
-# Combine and offset labels
+
 top_genes <- bind_rows(top_genes_up, top_genes_down) %>%
   mutate(
     label_x = log2FoldChange + ifelse(log2FoldChange > 0, 0.5, -0.5),
@@ -724,7 +689,6 @@ ggplot(volcano_df, aes(x = log2FoldChange, y = log10padj)) +
     plot.title = element_text(face = "bold", hjust = 0.5, size = rel(1.2))
   ) +
 
-  # Labels
   geom_text(
     data = top_genes,
     aes(x = label_x, y = label_y,
@@ -911,203 +875,6 @@ kegg <- enrichKEGG(gene = unique(entrez$ENTREZID), organism = "hsa", keyType = "
 dotplot(kegg, showCategory = 10, title = "KEGG Downregulated: >7 Days")
 ```
 
-### CompareCluster
-
------------------
-
-#### <3 vs 3–7
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-lt3 <- rbind(protein_coding_less3, protein_coding_days_3_4)
-lt3_up <- lt3 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
-lt3_ids <- bitr(lt3_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
-
-three7_up <- protein_coding_days_3_7 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
-three7_ids <- bitr(three7_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
-
-gene_list <- list("lt3" = unique(lt3_ids$ENTREZID), "3_7" = unique(three7_ids$ENTREZID))
-compare <- compareCluster(geneCluster = gene_list, fun = "enrichGO", OrgDb = org.Hs.eg.db, ont = "BP", keyType = "ENTREZID", pvalueCutoff = 0.05)
-dotplot(compare, showCategory = 8, title = "GO Compare: <3 vs 3–7")
-```
-
-#### 3–7 vs >7
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-three7_up <- protein_coding_days_3_7 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
-three7_ids <- bitr(three7_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
-
-gt7_up <- protein_coding_more_7 %>% filter(log2FoldChange > 1 & !is.na(hgnc_symbol) & hgnc_symbol != "")
-gt7_ids <- bitr(gt7_up$hgnc_symbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
-
-gene_list <- list("3_7" = unique(three7_ids$ENTREZID), "gt7" = unique(gt7_ids$ENTREZID))
-compare <- compareCluster(geneCluster = gene_list, fun = "enrichGO", OrgDb = org.Hs.eg.db, ont = "BP", keyType = "ENTREZID", pvalueCutoff = 0.05)
-dotplot(compare, showCategory = 8, title = "GO Compare: 3–7 vs >7")
-```
-
-```{r}
-# Significant DEGs (padj < 0.05)
-deg_less3   <- rownames(res_less3[which(res_less3$padj < 0.05), ])
-deg_3_7     <- rownames(res_days_3_7[which(res_days_3_7$padj < 0.05), ])
-deg_more7   <- rownames(res_more_7[which(res_more_7$padj < 0.05), ])
-
-# Counts of unique vs shared
-all_degs <- list("<3d" = deg_less3, "3-7d" = deg_3_7, ">7d" = deg_more7)
-
-library(VennDiagram)
-venn.plot <- venn.diagram(
-  x = all_degs,
-  filename = NULL,
-  fill = c("#E41A1C", "#4DAF4A", "#377EB8"),
-  alpha = 0.5,
-  cat.cex = 1.2
-)
-grid::grid.draw(venn.plot)
-
-# Numbers
-lengths(all_degs)                         # total per group
-length(Reduce(intersect, all_degs))       # shared across all groups
-
-# Extract top 50 by |log2FC|
-topN <- 50
-top_less3 <- rownames(head(res_less3[order(abs(res_less3$log2FoldChange), decreasing = TRUE), ], topN))
-top_3_7   <- rownames(head(res_days_3_7[order(abs(res_days_3_7$log2FoldChange), decreasing = TRUE), ], topN))
-top_more7 <- rownames(head(res_more_7[order(abs(res_more_7$log2FoldChange), decreasing = TRUE), ], topN))
-
-# Overlap
-Reduce(intersect, list(top_less3, top_3_7, top_more7))
-length(Reduce(intersect, list(top_less3, top_3_7, top_more7))) # how many overlap
-
-# Create data frames of log2FC for shared genes
-fc_df <- data.frame(
-  less3 = res_less3$log2FoldChange,
-  day3_7 = res_days_3_7$log2FoldChange,
-  more7 = res_more_7$log2FoldChange
-)
-rownames(fc_df) <- rownames(res_less3)
-
-# Keep only complete cases (no NA)
-fc_df <- na.omit(fc_df)
-
-# Correlation matrix
-cor_mat <- cor(fc_df, method = "pearson")
-cor_mat
-
-# Example: correlation less3 vs 3-7
-cor(fc_df$less3, fc_df$day3_7, use = "complete.obs")
-
-```
-
-### Gene Set Enrichment Analysis (GSEA)
-
-#### <3
-
-```{r}
-# Prepare ranked gene list for GSEA
-less3_ranks <- res_df_less3 %>%
-  filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
-  group_by(hgnc_symbol) %>% 
-  summarise(score = mean(log2FoldChange)) %>%
-  arrange(desc(score))
-
-# Convert to ENTREZ IDs
-entrez_ids <- bitr(less3_ranks$hgnc_symbol, fromType = "SYMBOL",
-                   toType = "ENTREZID", OrgDb = org.Hs.eg.db)
-
-# Join ranks with ENTREZ IDs
-less3_ranks <- left_join(entrez_ids, less3_ranks, by = c("SYMBOL" = "hgnc_symbol")) %>%
-  distinct(ENTREZID, .keep_all = TRUE) %>%
-  drop_na()
-
-geneList_less3 <- less3_ranks$score
-names(geneList_less3) <- less3_ranks$ENTREZID
-geneList_less3 <- sort(geneList_less3, decreasing = TRUE)
-
-# Run GSEA
-gsea_less3 <- gseGO(
-  geneList = geneList_less3,
-  OrgDb = org.Hs.eg.db,
-  ont = "BP",
-  keyType = "ENTREZID",
-  minGSSize = 10,
-  maxGSSize = 500,
-  pvalueCutoff = 0.05,
-  verbose = FALSE
-)
-
-dotplot(gsea_less3, showCategory = 9, title = "GSEA – <3 Days (BP)")
-
-```
-
-#### 3-7
-
-```{r}
-# 1. Prepare ranked gene list (log2FoldChange named by SYMBOL)
-gsea_input <- res_df_days_3_7 %>%
-  dplyr::filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
-  dplyr::distinct(hgnc_symbol, .keep_all = TRUE) %>%
-  dplyr::arrange(desc(log2FoldChange)) %>%
-  dplyr::pull(log2FoldChange)
-
-names(gsea_input) <- res_df_days_3_7 %>%
-  dplyr::filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
-  dplyr::distinct(hgnc_symbol, .keep_all = TRUE) %>%
-  dplyr::pull(hgnc_symbol)
-
-gsea_input <- sort(gsea_input, decreasing = TRUE)  # Must be sorted
-
-# 2. Run GSEA for GO Biological Process (BP)
-gsea_result <- gseGO(
-  geneList = gsea_input,
-  OrgDb = org.Hs.eg.db,
-  keyType = "SYMBOL",
-  ont = "BP",
-  minGSSize = 10,
-  maxGSSize = 500,
-  pvalueCutoff = 0.05,
-  verbose = FALSE
-)
-
-# 3. Plot results
-dotplot(gsea_result, showCategory = 10, title = "GSEA – GO Biological Process")
-
-```
-
-#### >7
-```{r}
-# Prepare ranked gene list
-gt7_ranks <- res_df_more_7 %>%
-  filter(!is.na(log2FoldChange), !is.na(hgnc_symbol), hgnc_symbol != "") %>%
-  group_by(hgnc_symbol) %>% 
-  summarise(score = mean(log2FoldChange)) %>%
-  arrange(desc(score))
-
-# Convert symbols to Entrez IDs
-entrez_ids <- bitr(gt7_ranks$hgnc_symbol, fromType = "SYMBOL",
-                   toType = "ENTREZID", OrgDb = org.Hs.eg.db)
-
-# Merge and clean gene list
-gt7_ranks <- left_join(entrez_ids, gt7_ranks, by = c("SYMBOL" = "hgnc_symbol")) %>%
-  distinct(ENTREZID, .keep_all = TRUE) %>%
-  drop_na()
-
-# Format for GSEA
-geneList_gt7 <- gt7_ranks$score
-names(geneList_gt7) <- gt7_ranks$ENTREZID
-geneList_gt7 <- sort(geneList_gt7, decreasing = TRUE)
-
-# Run GSEA
-gsea_gt7 <- gseGO(
-  geneList = geneList_gt7,
-  OrgDb = org.Hs.eg.db,
-  ont = "BP",
-  keyType = "ENTREZID",
-  minGSSize = 10,
-  maxGSSize = 500,
-  pvalueCutoff = 0.05,
-  verbose = FALSE
-)
-
-dotplot(gsea_gt7, showCategory = 9, title = "GSEA – >7 Days (BP)")
-
-```
 
 #### Gene Analysis
 
@@ -1172,19 +939,15 @@ gene_sets <- list(
 ```
 
 ```{r}
-# Initialize list to hold GO results
 go_results_list <- list()
 
-# Loop over each gene set
 for (set_name in names(gene_sets)) {
   symbols <- gene_sets[[set_name]]
 
   if (length(symbols) > 0) {
-    # Convert to ENTREZID
     entrez <- bitr(symbols, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
 
     if (!is.null(entrez) && nrow(entrez) > 0) {
-      # Run GO enrichment
       go <- enrichGO(
         gene = unique(entrez$ENTREZID),
         OrgDb = org.Hs.eg.db,
@@ -1207,41 +970,24 @@ for (set_name in names(gene_sets)) {
 ```
 
 ```{r}
-# Extract all GO term descriptions for each enrichment result
 go_top_terms <- lapply(go_results_list, function(df) {
-  df <- df[order(df$p.adjust), ]   # sort by adjusted p-value
-  df$Description                  # keep all descriptions
+  df <- df[order(df$p.adjust), ]   
+  df$Description                 
 })
 
-# Determine max length (to pad shorter sets)
 max_len <- max(sapply(go_top_terms, length))
 
-# Pad each list with NA so all columns align
 go_top_terms_padded <- lapply(go_top_terms, function(x) {
   length(x) <- max_len
   return(x)
 })
 
-# Convert to data.frame
 go_top_df <- as.data.frame(go_top_terms_padded, stringsAsFactors = FALSE)
 rownames(go_top_df) <- 1:max_len
 
-# View table
 print(go_top_df)
 
 ```
-
-
-
-| Tier | Genes to analyze                | Purpose                    |
-| ---- | ------------------------------- | -------------------------- |
-| 1    | Top 30 L2FC                     | Unbiased strongest signals |
-| 2    | Known GCA-related genes         | Biological relevance       | 
-| 3    | Steroid-response genes          | Mechanism of treatment     |
-| 4    | Genes in enriched GO/KEGG terms | Connect stats to biology   |
-
-*need to look at 2-3 also within the Venn diagram section
-
 
 #### PCA
 
